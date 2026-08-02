@@ -2,8 +2,8 @@
 #include <ESP32Servo.h>
 
 #define LED_PIN 22
-#define SERVO1_PIN 19
-#define SERVO2_PIN 23
+#define SERVO1_PIN 12
+#define SERVO2_PIN 14
 
 #define LED_ON LOW
 #define LED_OFF HIGH
