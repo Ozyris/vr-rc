@@ -9,12 +9,12 @@
 #define LED_ON  LOW
 #define LED_OFF HIGH
 
-// Структура данных для приема (должна совпадать с передатчиком)
+// === НОВАЯ СТРУКТУРА (4 БАЙТА) ===
 typedef struct struct_message {
-    int angle1;
-    int angle2;
-    uint16_t buttons;
-    uint8_t connected;
+    uint8_t angle1;    // 0-180
+    uint8_t angle2;    // 0-180
+    uint8_t buttons;   // 8 кнопок (битовая маска)
+    uint8_t connected; // 0 или 1
 } struct_message;
 
 struct_message receivedData;
@@ -28,8 +28,6 @@ int currentAngle1 = 90;
 int currentAngle2 = 90;
 
 // MAC-адрес ретранслятора (Lolin32 Lite)
-// Замените на MAC-адрес вашего ретранслятора
-// uint8_t transmitterMac[] = {0xXX, 0xXX, 0xXX, 0xXX, 0xXX, 0xXX};
 uint8_t transmitterMac[] = {0x7C, 0x9E, 0xBD, 0xED, 0x7B, 0xD0};
 
 unsigned long lastReceiveTime = 0;
@@ -61,9 +59,9 @@ void OnDataRecv(const esp_now_recv_info *info, const uint8_t *incomingData, int 
         digitalWrite(LED_PIN, LED_ON);
         
         // Отладка
-        Serial.printf("Recv: A1=%d, A2=%d, Buttons=0x%04X, Connected=%d\n", 
+        Serial.printf("Recv: A1=%d, A2=%d, B=0x%02X\n", 
                       receivedData.angle1, receivedData.angle2, 
-                      receivedData.buttons, receivedData.connected);
+                      receivedData.buttons);
     } else {
         // Если контроллер отключен - центрируем сервы
         servo1.write(90);
@@ -103,7 +101,7 @@ void setup() {
 
     // Инициализация WiFi и ESP-NOW
     WiFi.mode(WIFI_STA);
-    WiFi.setSleep(false);
+    // WiFi.setSleep(false); // Убрал, так как вызывает перезагрузку
     
     if (esp_now_init() != ESP_OK) {
         Serial.println("Error initializing ESP-NOW");
