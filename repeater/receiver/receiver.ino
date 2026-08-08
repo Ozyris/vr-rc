@@ -9,7 +9,7 @@
 #define LED_ON  LOW
 #define LED_OFF HIGH
 
-// === НОВАЯ СТРУКТУРА (4 БАЙТА) ===
+// === СТРУКТУРА (4 БАЙТА) ===
 typedef struct struct_message {
     uint8_t angle1;    // 0-180
     uint8_t angle2;    // 0-180
@@ -33,45 +33,52 @@ uint8_t transmitterMac[] = {0x7C, 0x9E, 0xBD, 0xED, 0x7B, 0xD0};
 unsigned long lastReceiveTime = 0;
 const unsigned long TIMEOUT = 500; // Таймаут 500мс
 
-// Исправленный callback при получении данных (новая сигнатура)
-void OnDataRecv(const esp_now_recv_info *info, const uint8_t *incomingData, int len) {
-    // Проверяем, что данные пришли от нашего ретранслятора
-    if (memcmp(info->src_addr, transmitterMac, 6) != 0) {
-        return; // Игнорируем данные от других устройств
-    }
-    
-    memcpy(&receivedData, incomingData, sizeof(receivedData));
-    lastReceiveTime = millis();
-    
-    // Обновляем сервы только если данные получены
-    if (receivedData.connected) {
-        if (receivedData.angle1 != currentAngle1) {
-            servo1.write(receivedData.angle1);
-            currentAngle1 = receivedData.angle1;
-        }
-        
-        if (receivedData.angle2 != currentAngle2) {
-            servo2.write(receivedData.angle2);
-            currentAngle2 = receivedData.angle2;
-        }
-        
-        // Индикация приема данных
-        digitalWrite(LED_PIN, LED_ON);
-        
-        // Отладка
-        Serial.printf("Recv: A1=%d, A2=%d, B=0x%02X\n", 
-                      receivedData.angle1, receivedData.angle2, 
-                      receivedData.buttons);
-    } else {
-        // Если контроллер отключен - центрируем сервы
-        servo1.write(90);
-        servo2.write(90);
-        currentAngle1 = 90;
-        currentAngle2 = 90;
-        digitalWrite(LED_PIN, LED_OFF);
-        Serial.println("Controller disconnected - centering servos");
-    }
-}
+// === УНИВЕРСАЛЬНЫЙ CALLBACK ДЛЯ ОБЕИХ ВЕРСИЙ ===
+#if ESP_IDF_VERSION_MAJOR >= 5
+  // Для ESP-IDF 5.x (новая сигнатура)
+  void OnDataRecv(const esp_now_recv_info *info, const uint8_t *incomingData, int len) {
+      const uint8_t *mac = info->src_addr;
+#else
+  // Для ESP-IDF 4.x (старая сигнатура)
+  void OnDataRecv(const uint8_t *mac, const uint8_t *incomingData, int len) {
+#endif
+      // Проверяем, что данные пришли от нашего ретранслятора
+      if (memcmp(mac, transmitterMac, 6) != 0) {
+          return; // Игнорируем данные от других устройств
+      }
+      
+      memcpy(&receivedData, incomingData, sizeof(receivedData));
+      lastReceiveTime = millis();
+      
+      // Обновляем сервы только если данные получены
+      if (receivedData.connected) {
+          if (receivedData.angle1 != currentAngle1) {
+              servo1.write(receivedData.angle1);
+              currentAngle1 = receivedData.angle1;
+          }
+          
+          if (receivedData.angle2 != currentAngle2) {
+              servo2.write(receivedData.angle2);
+              currentAngle2 = receivedData.angle2;
+          }
+          
+          // Индикация приема данных
+          digitalWrite(LED_PIN, LED_ON);
+          
+          // Отладка
+          Serial.printf("Recv: A1=%d, A2=%d, B=0x%02X\n", 
+                        receivedData.angle1, receivedData.angle2, 
+                        receivedData.buttons);
+      } else {
+          // Если контроллер отключен - центрируем сервы
+          servo1.write(90);
+          servo2.write(90);
+          currentAngle1 = 90;
+          currentAngle2 = 90;
+          digitalWrite(LED_PIN, LED_OFF);
+          Serial.println("Controller disconnected - centering servos");
+      }
+  }
 
 void setup() {
     Serial.begin(115200);
@@ -108,7 +115,7 @@ void setup() {
         return;
     }
     
-    // Регистрируем callback с новой сигнатурой
+    // Регистрируем callback (работает с обеими версиями)
     esp_now_register_recv_cb(OnDataRecv);
 }
 
