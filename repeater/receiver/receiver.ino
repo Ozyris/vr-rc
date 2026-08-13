@@ -2,6 +2,7 @@
 #include <esp_now.h>
 #include <ESP32Servo.h>
 
+#define BIND_PIN 6        // пин для режима маяка на приемнике
 #define SERVO1_PIN 4
 #define SERVO2_PIN 3
 #define LED_PIN 8
@@ -17,6 +18,8 @@ typedef struct {
 } struct_message;
 
 struct_message rxData;
+bool isBindMode = false;  // Добавлено
+uint8_t broadcastMac[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF}; // Добавлено
 
 Servo servo1;
 Servo servo2;
@@ -31,12 +34,13 @@ unsigned long maxDelta = 0;
 unsigned long totalDelta = 0;
 int deltaCount = 0;
 
-// Универсальный callback для обеих версий ESP-IDF
 #if ESP_IDF_VERSION_MAJOR >= 5
   void OnDataRecv(const esp_now_recv_info *info, const uint8_t *incomingData, int len) {
 #else
   void OnDataRecv(const uint8_t *mac, const uint8_t *incomingData, int len) {
 #endif
+    if (isBindMode) return; // Игнорируем входящие данные в режиме бинда
+    
     unsigned long now = millis();
     
     if (len != sizeof(struct_message)) {
@@ -47,30 +51,24 @@ int deltaCount = 0;
     memcpy(&rxData, incomingData, sizeof(rxData));
     packetCount++;
 
-    // === ДИАГНОСТИКА: интервал между пакетами ===
     if (lastPacketTime > 0) {
         unsigned long delta = now - lastPacketTime;
-        
-        // Обновляем статистику
         if (delta < minDelta) minDelta = delta;
         if (delta > maxDelta) maxDelta = delta;
         totalDelta += delta;
         deltaCount++;
         
-        // Выводим каждый пакет с интервалом
         Serial.printf("[%3lums] SEQ=%lu A1=%u A2=%u\n",
                       delta,
                       (unsigned long)rxData.seq,
                       rxData.angle1, rxData.angle2);
     } else {
-        // Первый пакет
         Serial.printf("[FIRST] SEQ=%lu A1=%u A2=%u\n",
                       (unsigned long)rxData.seq,
                       rxData.angle1, rxData.angle2);
     }
     lastPacketTime = now;
 
-    // Обновляем сервы
     if (rxData.connected) {
         if (rxData.angle1 != currentAngle1) {
             servo1.write(rxData.angle1);
@@ -91,13 +89,10 @@ int deltaCount = 0;
         digitalWrite(LED_PIN, LED_OFF);
     }
 
-    // Каждые 100 пакетов - статистика
     if (packetCount % 100 == 0 && deltaCount > 0) {
         float avgDelta = (float)totalDelta / deltaCount;
         Serial.printf("=== STATS: packets=%lu, min=%lums, max=%lums, avg=%.1fms ===\n",
                       (unsigned long)packetCount, minDelta, maxDelta, avgDelta);
-        
-        // Сбрасываем статистику для следующего периода
         minDelta = 9999;
         maxDelta = 0;
         totalDelta = 0;
@@ -109,10 +104,19 @@ void setup() {
     Serial.begin(115200);
     delay(500);
 
-    Serial.println("=== RECEIVER WITH INTERVAL DIAGNOSTICS ===");
+    Serial.println("=== RECEIVER ===");
 
     pinMode(LED_PIN, OUTPUT);
     digitalWrite(LED_PIN, LED_OFF);
+
+    // Добавлено: опрос пина бинда (6)
+    pinMode(BIND_PIN, INPUT_PULLUP);
+    delay(50);
+    if (digitalRead(BIND_PIN) == LOW) {
+        isBindMode = true;
+        digitalWrite(LED_PIN, LED_ON); // Горит постоянно — режим маяка
+        Serial.println("BIND BEACON MODE ON");
+    }
 
     ESP32PWM::allocateTimer(0);
     ESP32PWM::allocateTimer(1);
@@ -136,10 +140,32 @@ void setup() {
     }
 
     esp_now_register_recv_cb(OnDataRecv);
+    
+    // Добавлено: регистрируем широковещательный адрес, если мы маяк
+    if (isBindMode) {
+        esp_now_peer_info_t peerInfo = {};
+        memcpy(peerInfo.peer_addr, broadcastMac, 6);
+        peerInfo.channel = 1;
+        peerInfo.encrypt = false;
+        esp_now_add_peer(&peerInfo);
+    }
+
     Serial.println("ESP-NOW READY");
     Serial.println("========================================");
 }
 
 void loop() {
+    // Добавлено: посылка маяка в режиме бинда
+    if (isBindMode) {
+        static unsigned long lastBeacon = 0;
+        if (millis() - lastBeacon > 300) {
+            lastBeacon = millis();
+            struct_message beaconMsg = {90, 90, 0, 3, 0}; // connected = 3 (маркер маяка)
+            esp_now_send(broadcastMac, (uint8_t *)&beaconMsg, sizeof(beaconMsg));
+        }
+        delay(10);
+        return;
+    }
+
     delay(10);
 }
