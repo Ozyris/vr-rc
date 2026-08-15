@@ -2,13 +2,16 @@
 #include <esp_now.h>
 #include <ESP32Servo.h>
 
+// === ОТЛАДКА ===
+//#define DEBUG  // Раскомментируйте для отладки, закомментируйте для работы
+
 #define BIND_PIN 6
 
 // === ПИНЫ ДЛЯ КАНАЛОВ 1-4 ===
-#define CH1_PIN 1   // Aileron
-#define CH2_PIN 2   // Elevator
-#define CH3_PIN 3   // Throttle
-#define CH4_PIN 4   // Rudder
+#define CH1_PIN 1
+#define CH2_PIN 2
+#define CH3_PIN 3
+#define CH4_PIN 4
 
 #define LED_PIN 8
 #define LED_ON LOW
@@ -24,14 +27,24 @@
 #define FAILSAFE_TIMEOUT 500
 #define FAILSAFE_CH1 PULSE_CENTER
 #define FAILSAFE_CH2 PULSE_CENTER
-#define FAILSAFE_CH3 PULSE_MIN   // Газ = 0
+#define FAILSAFE_CH3 PULSE_MIN
 #define FAILSAFE_CH4 PULSE_CENTER
 #define FAILSAFE_CH5 PULSE_MIN
 #define FAILSAFE_CH6 PULSE_MIN
 #define FAILSAFE_CH7 PULSE_MIN
 #define FAILSAFE_CH8 PULSE_MIN
 
-// === СТРУКТУРА С 8 КАНАЛАМИ ===
+// === МАКРОСЫ ДЛЯ ОТЛАДКИ ===
+#ifdef DEBUG
+  #define DEBUG_PRINT(...) Serial.print(__VA_ARGS__)
+  #define DEBUG_PRINTF(...) Serial.printf(__VA_ARGS__)
+  #define DEBUG_PRINTLN(...) Serial.println(__VA_ARGS__)
+#else
+  #define DEBUG_PRINT(...)
+  #define DEBUG_PRINTF(...)
+  #define DEBUG_PRINTLN(...)
+#endif
+
 typedef struct {
     uint16_t channels[RC_CHANNELS];
     uint8_t connected;
@@ -42,13 +55,11 @@ struct_message rxData;
 bool isBindMode = false;
 uint8_t broadcastMac[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
 
-// === 4 СЕРВО/ВЫХОДА ===
 Servo servo1;
 Servo servo2;
 Servo servo3;
 Servo servo4;
 
-// === ТЕКУЩИЕ ЗНАЧЕНИЯ ===
 uint16_t currentCh1 = PULSE_CENTER;
 uint16_t currentCh2 = PULSE_CENTER;
 uint16_t currentCh3 = PULSE_CENTER;
@@ -65,7 +76,6 @@ bool failsafeActive = false;
 unsigned long failsafeLedTime = 0;
 bool failsafeLedState = false;
 
-// === ФУНКЦИЯ ДЛЯ БЕЗОПАСНОЙ ЗАПИСИ ПУЛЬСА ===
 void writeServoPulse(Servo &servo, uint16_t pulse) {
     if (pulse < PULSE_MIN) pulse = PULSE_MIN;
     if (pulse > PULSE_MAX) pulse = PULSE_MAX;
@@ -82,64 +92,62 @@ void writeServoPulse(Servo &servo, uint16_t pulse) {
     unsigned long now = millis();
     
     if (len != sizeof(struct_message)) {
-        Serial.printf("Wrong packet size: %d (expected %d)\n", len, sizeof(struct_message));
+        DEBUG_PRINTF("Wrong packet size: %d (expected %d)\n", len, sizeof(struct_message));
         return;
     }
 
     memcpy(&rxData, incomingData, sizeof(rxData));
     packetCount++;
     
-    if (lastPacketTime > 0) {
-        unsigned long delta = now - lastPacketTime;
-        if (delta < minDelta) minDelta = delta;
-        if (delta > maxDelta) maxDelta = delta;
-        totalDelta += delta;
-        deltaCount++;
-        
-        Serial.printf("[%3lums] SEQ=%lu CH1=%4d CH2=%4d CH3=%4d CH4=%4d CH5=%4d CH6=%4d CH7=%4d CH8=%4d\n",
-                      delta,
-                      (unsigned long)rxData.seq,
-                      rxData.channels[0], rxData.channels[1],
-                      rxData.channels[2], rxData.channels[3],
-                      rxData.channels[4], rxData.channels[5],
-                      rxData.channels[6], rxData.channels[7]);
-    } else {
-        Serial.printf("[FIRST] SEQ=%lu CH1=%4d CH2=%4d CH3=%4d CH4=%4d CH5=%4d CH6=%4d CH7=%4d CH8=%4d\n",
-                      (unsigned long)rxData.seq,
-                      rxData.channels[0], rxData.channels[1],
-                      rxData.channels[2], rxData.channels[3],
-                      rxData.channels[4], rxData.channels[5],
-                      rxData.channels[6], rxData.channels[7]);
-    }
+    #ifdef DEBUG
+      if (lastPacketTime > 0) {
+          unsigned long delta = now - lastPacketTime;
+          if (delta < minDelta) minDelta = delta;
+          if (delta > maxDelta) maxDelta = delta;
+          totalDelta += delta;
+          deltaCount++;
+          
+          DEBUG_PRINTF("[%3lums] SEQ=%lu CH1=%4d CH2=%4d CH3=%4d CH4=%4d CH5=%4d CH6=%4d CH7=%4d CH8=%4d\n",
+                        delta,
+                        (unsigned long)rxData.seq,
+                        rxData.channels[0], rxData.channels[1],
+                        rxData.channels[2], rxData.channels[3],
+                        rxData.channels[4], rxData.channels[5],
+                        rxData.channels[6], rxData.channels[7]);
+      } else {
+          DEBUG_PRINTF("[FIRST] SEQ=%lu CH1=%4d CH2=%4d CH3=%4d CH4=%4d CH5=%4d CH6=%4d CH7=%4d CH8=%4d\n",
+                        (unsigned long)rxData.seq,
+                        rxData.channels[0], rxData.channels[1],
+                        rxData.channels[2], rxData.channels[3],
+                        rxData.channels[4], rxData.channels[5],
+                        rxData.channels[6], rxData.channels[7]);
+      }
+    #endif
     
     lastPacketTime = now;
 
     if (failsafeActive) {
         failsafeActive = false;
         digitalWrite(LED_PIN, LED_ON);
-        Serial.println("Failsafe: connection restored");
+        DEBUG_PRINTLN("Failsafe: connection restored");
     }
 
     if (rxData.connected) {
-        // === КАНАЛ 1 ===
         if (rxData.channels[0] != currentCh1) {
             writeServoPulse(servo1, rxData.channels[0]);
             currentCh1 = rxData.channels[0];
         }
         
-        // === КАНАЛ 2 ===
         if (rxData.channels[1] != currentCh2) {
             writeServoPulse(servo2, rxData.channels[1]);
             currentCh2 = rxData.channels[1];
         }
         
-        // === КАНАЛ 3 ===
         if (rxData.channels[2] != currentCh3) {
             writeServoPulse(servo3, rxData.channels[2]);
             currentCh3 = rxData.channels[2];
         }
         
-        // === КАНАЛ 4 ===
         if (rxData.channels[3] != currentCh4) {
             writeServoPulse(servo4, rxData.channels[3]);
             currentCh4 = rxData.channels[3];
@@ -147,7 +155,6 @@ void writeServoPulse(Servo &servo, uint16_t pulse) {
         
         digitalWrite(LED_PIN, LED_ON);
     } else {
-        // При отключении - центрируем все
         writeServoPulse(servo1, PULSE_CENTER);
         writeServoPulse(servo2, PULSE_CENTER);
         writeServoPulse(servo3, PULSE_CENTER);
@@ -159,28 +166,32 @@ void writeServoPulse(Servo &servo, uint16_t pulse) {
         digitalWrite(LED_PIN, LED_OFF);
     }
 
-    if (packetCount % 100 == 0 && deltaCount > 0) {
-        float avgDelta = (float)totalDelta / deltaCount;
-        Serial.printf("=== STATS: packets=%lu, min=%lums, max=%lums, avg=%.1fms ===\n",
-                      (unsigned long)packetCount, minDelta, maxDelta, avgDelta);
-        minDelta = 9999;
-        maxDelta = 0;
-        totalDelta = 0;
-        deltaCount = 0;
-    }
+    #ifdef DEBUG
+      if (packetCount % 100 == 0 && deltaCount > 0) {
+          float avgDelta = (float)totalDelta / deltaCount;
+          DEBUG_PRINTF("=== STATS: packets=%lu, min=%lums, max=%lums, avg=%.1fms ===\n",
+                        (unsigned long)packetCount, minDelta, maxDelta, avgDelta);
+          minDelta = 9999;
+          maxDelta = 0;
+          totalDelta = 0;
+          deltaCount = 0;
+      }
+    #endif
 }
 
 void setup() {
     Serial.begin(115200);
     delay(500);
 
-    Serial.println("=== RECEIVER (4 OUTPUTS) ===");
-    Serial.printf("Channels: %d, Pulse: %d-%d us\n", RC_CHANNELS, PULSE_MIN, PULSE_MAX);
-    Serial.printf("Failsafe timeout: %d ms\n", FAILSAFE_TIMEOUT);
-    Serial.printf("CH1: Pin %d\n", CH1_PIN);
-    Serial.printf("CH2: Pin %d\n", CH2_PIN);
-    Serial.printf("CH3: Pin %d\n", CH3_PIN);
-    Serial.printf("CH4: Pin %d\n", CH4_PIN);
+    #ifdef DEBUG
+      Serial.println("=== RECEIVER (4 OUTPUTS) ===");
+      Serial.printf("Channels: %d, Pulse: %d-%d us\n", RC_CHANNELS, PULSE_MIN, PULSE_MAX);
+      Serial.printf("Failsafe timeout: %d ms\n", FAILSAFE_TIMEOUT);
+      Serial.printf("CH1: Pin %d\n", CH1_PIN);
+      Serial.printf("CH2: Pin %d\n", CH2_PIN);
+      Serial.printf("CH3: Pin %d\n", CH3_PIN);
+      Serial.printf("CH4: Pin %d\n", CH4_PIN);
+    #endif
 
     pinMode(LED_PIN, OUTPUT);
     digitalWrite(LED_PIN, LED_OFF);
@@ -190,10 +201,9 @@ void setup() {
     if (digitalRead(BIND_PIN) == LOW) {
         isBindMode = true;
         digitalWrite(LED_PIN, LED_ON);
-        Serial.println("BIND BEACON MODE ON");
+        DEBUG_PRINTLN("BIND BEACON MODE ON");
     }
 
-    // === ИНИЦИАЛИЗАЦИЯ 4 ВЫХОДОВ ===
     ESP32PWM::allocateTimer(0);
     ESP32PWM::allocateTimer(1);
     ESP32PWM::allocateTimer(2);
@@ -218,11 +228,13 @@ void setup() {
     WiFi.disconnect();
     delay(100);
 
-    Serial.print("RX MAC: ");
-    Serial.println(WiFi.macAddress());
+    #ifdef DEBUG
+      Serial.print("RX MAC: ");
+      Serial.println(WiFi.macAddress());
+    #endif
 
     if (esp_now_init() != ESP_OK) {
-        Serial.println("ESP-NOW INIT FAILED");
+        DEBUG_PRINTLN("ESP-NOW INIT FAILED");
         return;
     }
 
@@ -236,8 +248,10 @@ void setup() {
         esp_now_add_peer(&peerInfo);
     }
 
-    Serial.println("ESP-NOW READY");
-    Serial.println("========================================");
+    #ifdef DEBUG
+      Serial.println("ESP-NOW READY");
+      Serial.println("========================================");
+    #endif
 }
 
 void loop() {
@@ -256,7 +270,6 @@ void loop() {
         return;
     }
 
-    // === ПРОВЕРКА FAILSAFE ===
     unsigned long now = millis();
     if (!failsafeActive && (now - lastPacketTime > FAILSAFE_TIMEOUT)) {
         failsafeActive = true;
@@ -269,8 +282,8 @@ void loop() {
         currentCh3 = FAILSAFE_CH3;
         currentCh4 = FAILSAFE_CH4;
         
-        Serial.println("!!! FAILSAFE ACTIVATED !!!");
-        Serial.printf("CH1=%d CH2=%d CH3=%d CH4=%d\n", 
+        DEBUG_PRINTLN("!!! FAILSAFE ACTIVATED !!!");
+        DEBUG_PRINTF("CH1=%d CH2=%d CH3=%d CH4=%d\n", 
                       FAILSAFE_CH1, FAILSAFE_CH2, FAILSAFE_CH3, FAILSAFE_CH4);
     }
 

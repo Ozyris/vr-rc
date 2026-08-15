@@ -3,16 +3,19 @@
 #include <esp_now.h>
 #include <Preferences.h> 
 
-#define BIND_PIN 13       // пин для входа в режим бинда
+// === ОТЛАДКА ===
+//#define DEBUG  // Раскомментируйте для отладки, закомментируйте для работы
+
+#define BIND_PIN 13
 #define LED_PIN 22
 #define LED_ON LOW
 #define LED_OFF HIGH
 
 // === НАСТРОЙКИ RC КАНАЛОВ ===
-#define RC_CHANNELS 8     // 8 каналов
-#define PULSE_MIN 1000    // Минимальный импульс (мкс)
-#define PULSE_MAX 2000    // Максимальный импульс (мкс)
-#define PULSE_CENTER 1500 // Центральное положение (мкс)
+#define RC_CHANNELS 8
+#define PULSE_MIN 1000
+#define PULSE_MAX 2000
+#define PULSE_CENTER 1500
 
 // === КАЛИБРОВКА СТИКОВ ===
 #define CAL_CENTER_X 0
@@ -21,6 +24,17 @@
 #define CAL_MAX_X 440
 #define CAL_MIN_Y -436
 #define CAL_MAX_Y 452
+
+// === МАКРОСЫ ДЛЯ ОТЛАДКИ ===
+#ifdef DEBUG
+  #define DEBUG_PRINT(...) Serial.print(__VA_ARGS__)
+  #define DEBUG_PRINTF(...) Serial.printf(__VA_ARGS__)
+  #define DEBUG_PRINTLN(...) Serial.println(__VA_ARGS__)
+#else
+  #define DEBUG_PRINT(...)
+  #define DEBUG_PRINTF(...)
+  #define DEBUG_PRINTLN(...)
+#endif
 
 uint8_t receiverMac[] = {0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
 bool isBindMode = false;     
@@ -83,9 +97,9 @@ void OnDataSent(const uint8_t *mac_addr, esp_now_send_status_t status) {
           memcpy(receiverMac, mac, 6);
         #endif
 
-        Serial.print("BIND SUCCESS! RX MAC saved: ");
-        for(int i=0; i<6; i++) Serial.printf("%02X%s", receiverMac[i], (i<5)?":":"");
-        Serial.println();
+        DEBUG_PRINT("BIND SUCCESS! RX MAC saved: ");
+        for(int i=0; i<6; i++) DEBUG_PRINTF("%02X%s", receiverMac[i], (i<5)?":":"");
+        DEBUG_PRINTLN();
 
         preferences.begin("rx_conf", false);
         preferences.putBytes("mac", receiverMac, 6);
@@ -100,7 +114,7 @@ void onConnectedController(ControllerPtr ctl) {
     bool foundEmptySlot = false;
     for (int i = 0; i < BP32_MAX_GAMEPADS; i++) {
         if (myControllers[i] == nullptr) {
-            Serial.printf("Controller connected, index=%d\n", i);
+            DEBUG_PRINTF("Controller connected, index=%d\n", i);
             myControllers[i] = ctl;
             foundEmptySlot = true;
             digitalWrite(LED_PIN, LED_ON);
@@ -131,24 +145,21 @@ void onDisconnectedController(ControllerPtr ctl) {
 void processGamepad(ControllerPtr ctl) {
     if (!sendFinished) return;
 
-    // === ЧИТАЕМ ОСИ ===
     int axisX = ctl->axisX();
     int axisY = ctl->axisY();
     int axisRX = ctl->axisRX();
     int axisRY = ctl->axisRY();
     
-    // === ЗАПОЛНЯЕМ КАНАЛЫ 1-4 ===
-    txData.channels[0] = mapAxisToPulse(axisX, CAL_CENTER_X, CAL_MIN_X, CAL_MAX_X);   // Aileron
-    txData.channels[1] = mapAxisToPulse(axisY, CAL_CENTER_Y, CAL_MIN_Y, CAL_MAX_Y);   // Elevator
-    txData.channels[2] = mapAxisToPulse(axisRY, 0, -512, 512);                        // Throttle
-    txData.channels[3] = mapAxisToPulse(axisRX, 0, -512, 512);                        // Rudder
+    txData.channels[0] = mapAxisToPulse(axisX, CAL_CENTER_X, CAL_MIN_X, CAL_MAX_X);
+    txData.channels[1] = mapAxisToPulse(axisY, CAL_CENTER_Y, CAL_MIN_Y, CAL_MAX_Y);
+    txData.channels[2] = mapAxisToPulse(axisRY, 0, -512, 512);
+    txData.channels[3] = mapAxisToPulse(axisRX, 0, -512, 512);
     
-    // === КНОПКИ → КАНАЛЫ 5-8 ===
     uint16_t buttons = ctl->buttons();
-    txData.channels[4] = (buttons & 0x0010) ? PULSE_MAX : PULSE_MIN;  // Канал 5: кнопка 0x0010
-    txData.channels[5] = (buttons & 0x0020) ? PULSE_MAX : PULSE_MIN;  // Канал 6: кнопка 0x0020
-    txData.channels[6] = (buttons & 0x0001) ? PULSE_MAX : PULSE_MIN;  // Канал 7: кнопка 0x0001
-    txData.channels[7] = (buttons & 0x0002) ? PULSE_MAX : PULSE_MIN;  // Канал 8: кнопка 0x0002
+    txData.channels[4] = (buttons & 0x0010) ? PULSE_MAX : PULSE_MIN;
+    txData.channels[5] = (buttons & 0x0020) ? PULSE_MAX : PULSE_MIN;
+    txData.channels[6] = (buttons & 0x0001) ? PULSE_MAX : PULSE_MIN;
+    txData.channels[7] = (buttons & 0x0002) ? PULSE_MAX : PULSE_MIN;
     
     txData.connected = 1;
     txData.seq = sequence++;
@@ -159,13 +170,15 @@ void processGamepad(ControllerPtr ctl) {
         sendFinished = true;
     }
 
-    if (sequence % 10 == 0) {
-        Serial.printf("Sent: CH1=%4d CH2=%4d CH3=%4d CH4=%4d CH5=%4d CH6=%4d CH7=%4d CH8=%4d\n",
+    #ifdef DEBUG
+      if (sequence % 10 == 0) {
+        DEBUG_PRINTF("Sent: CH1=%4d CH2=%4d CH3=%4d CH4=%4d CH5=%4d CH6=%4d CH7=%4d CH8=%4d\n",
                       txData.channels[0], txData.channels[1], 
                       txData.channels[2], txData.channels[3],
                       txData.channels[4], txData.channels[5],
                       txData.channels[6], txData.channels[7]);
-    }
+      }
+    #endif
 }
 
 void processControllers() {
@@ -182,8 +195,10 @@ void setup() {
     Serial.begin(115200);
     delay(500);
 
-    Serial.println("=== TRANSMITTER (8 CHANNELS) ===");
-    Serial.printf("Channels: %d, Pulse: %d-%d us\n", RC_CHANNELS, PULSE_MIN, PULSE_MAX);
+    #ifdef DEBUG
+      Serial.println("=== TRANSMITTER (8 CHANNELS) ===");
+      Serial.printf("Channels: %d, Pulse: %d-%d us\n", RC_CHANNELS, PULSE_MIN, PULSE_MAX);
+    #endif
 
     pinMode(LED_PIN, OUTPUT);
     digitalWrite(LED_PIN, LED_OFF);
@@ -193,11 +208,20 @@ void setup() {
     if (digitalRead(BIND_PIN) == LOW) {
         isBindMode = true;
         digitalWrite(LED_PIN, LED_ON);
-        Serial.println("BIND MODE ON (Listening)");
+        DEBUG_PRINTLN("BIND MODE ON (Listening)");
     } else {
         preferences.begin("rx_conf", true);
         if (preferences.isKey("mac")) {
             preferences.getBytes("mac", receiverMac, 6);
+            #ifdef DEBUG
+              DEBUG_PRINT("Loaded MAC from NVS: ");
+              for(int i=0; i<6; i++) DEBUG_PRINTF("%02X%s", receiverMac[i], (i<5)?":":"");
+              DEBUG_PRINTLN();
+            #endif
+        } else {
+          #ifdef DEBUG
+            DEBUG_PRINTLN("No MAC in NVS, waiting for bind");
+          #endif
         }
         preferences.end();
     }
@@ -206,11 +230,13 @@ void setup() {
     WiFi.disconnect();
     delay(100);
 
-    Serial.print("TX MAC: ");
-    Serial.println(WiFi.macAddress());
+    #ifdef DEBUG
+      Serial.print("TX MAC: ");
+      Serial.println(WiFi.macAddress());
+    #endif
 
     if (esp_now_init() != ESP_OK) {
-        Serial.println("ESP-NOW INIT FAILED");
+        DEBUG_PRINTLN("ESP-NOW INIT FAILED");
         return;
     }
 
@@ -224,7 +250,7 @@ void setup() {
     peerInfo.encrypt = false;
 
     if (esp_now_add_peer(&peerInfo) != ESP_OK) {
-        Serial.println("FAILED TO ADD PEER");
+        DEBUG_PRINTLN("FAILED TO ADD PEER");
         return;
     }
 
@@ -234,7 +260,9 @@ void setup() {
         BP32.enableVirtualDevice(false);
     }
 
-    Serial.println("READY");
+    #ifdef DEBUG
+      Serial.println("READY");
+    #endif
 }
 
 void loop() {
