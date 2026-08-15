@@ -8,6 +8,13 @@
 #define LED_ON LOW
 #define LED_OFF HIGH
 
+// === НАСТРОЙКИ RC КАНАЛОВ ===
+#define RC_CHANNELS 6
+#define PULSE_MIN 1000    // Минимальный импульс (мкс)
+#define PULSE_MAX 2000    // Максимальный импульс (мкс)
+#define PULSE_CENTER 1500 // Центральное положение (мкс)
+
+// === КАЛИБРОВКА СТИКОВ ===
 #define CAL_CENTER_X 0
 #define CAL_CENTER_Y 0
 #define CAL_MIN_X -428
@@ -15,18 +22,17 @@
 #define CAL_MIN_Y -436
 #define CAL_MAX_Y 452
 
-uint8_t receiverMac[] = {0x00, 0x00, 0x00, 0x00, 0x00, 0x00}; // MAC по умолчанию
+uint8_t receiverMac[] = {0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
 bool isBindMode = false;     
 bool bindSuccess = false;   
 Preferences preferences;   
 
+// === НОВАЯ СТРУКТУРА С RC КАНАЛАМИ ===
 typedef struct {
-    uint8_t angle1;
-    uint8_t angle2;
-    uint8_t buttons;
-    uint8_t connected;
-    uint32_t seq;
-} struct_message;
+    uint16_t channels[RC_CHANNELS]; // 6 каналов (12 байт)
+    uint8_t connected;              // 1 байт
+    uint32_t seq;                   // 4 байта
+} struct_message;                   // ИТОГО: 17 байт
 
 struct_message txData;
 esp_now_peer_info_t peerInfo;
@@ -38,26 +44,32 @@ uint32_t sequence = 0;
 
 const int DEAD_ZONE = 10;
 
-int mapAxisToAngle(int axisValue, int center, int minVal, int maxVal) {
+// === ФУНКЦИЯ: ось (-512..512) -> импульс (1000..2000) ===
+uint16_t mapAxisToPulse(int axisValue, int center, int minVal, int maxVal) {
+    // Применяем мертвую зону
     if (abs(axisValue - center) < DEAD_ZONE) {
-        return 90;
+        return PULSE_CENTER;
     }
-    int normalized;
+    
+    // Преобразуем в импульс
+    int pulse;
     if (axisValue < center) {
-        normalized = map(axisValue, minVal, center, 0, 90);
+        pulse = map(axisValue, minVal, center, PULSE_MIN, PULSE_CENTER);
     } else {
-        normalized = map(axisValue, center, maxVal, 90, 180);
+        pulse = map(axisValue, center, maxVal, PULSE_CENTER, PULSE_MAX);
     }
-    if (normalized < 0) normalized = 0;
-    if (normalized > 180) normalized = 180;
-    return normalized;
+    
+    // Ограничиваем
+    if (pulse < PULSE_MIN) pulse = PULSE_MIN;
+    if (pulse > PULSE_MAX) pulse = PULSE_MAX;
+    
+    return (uint16_t)pulse;
 }
 
 void OnDataSent(const uint8_t *mac_addr, esp_now_send_status_t status) {
     sendFinished = true;
 }
 
-// Добавлено: прием пакетов в режиме бинда (ловим маяк от RX)
 #if ESP_IDF_VERSION_MAJOR >= 5
   void OnDataRecv(const esp_now_recv_info *info, const uint8_t *incomingData, int len) {
 #else
@@ -69,7 +81,6 @@ void OnDataSent(const uint8_t *mac_addr, esp_now_send_status_t status) {
     struct_message beacon;
     memcpy(&beacon, incomingData, sizeof(beacon));
 
-    // Если получили маркер маяка (connected == 3)
     if (beacon.connected == 3) {
         #if ESP_IDF_VERSION_MAJOR >= 5
           memcpy(receiverMac, info->src_addr, 6);
@@ -90,7 +101,7 @@ void OnDataSent(const uint8_t *mac_addr, esp_now_send_status_t status) {
 }
 
 void onConnectedController(ControllerPtr ctl) {
-    if (isBindMode) return; // Игнорируем геймпад в режиме бинда
+    if (isBindMode) return;
     bool foundEmptySlot = false;
     for (int i = 0; i < BP32_MAX_GAMEPADS; i++) {
         if (myControllers[i] == nullptr) {
@@ -125,12 +136,23 @@ void onDisconnectedController(ControllerPtr ctl) {
 void processGamepad(ControllerPtr ctl) {
     if (!sendFinished) return;
 
-    int axisX = ctl->axisX();
-    int axisY = ctl->axisY();
+    // === ЧИТАЕМ ОСИ ===
+    int axisX = ctl->axisX();   // -512..512 (левый стик X)
+    int axisY = ctl->axisY();   // -512..512 (левый стик Y)
+    int axisRX = ctl->axisRX(); // -512..512 (правый стик X)
+    int axisRY = ctl->axisRY(); // -512..512 (правый стик Y)
     
-    txData.angle1 = (uint8_t)mapAxisToAngle(axisX, CAL_CENTER_X, CAL_MIN_X, CAL_MAX_X);
-    txData.angle2 = (uint8_t)mapAxisToAngle(axisY, CAL_CENTER_Y, CAL_MIN_Y, CAL_MAX_Y);
-    txData.buttons = (uint8_t)(ctl->buttons() & 0xFF);
+    // === ЗАПОЛНЯЕМ КАНАЛЫ ===
+    txData.channels[0] = mapAxisToPulse(axisX, CAL_CENTER_X, CAL_MIN_X, CAL_MAX_X);   // Aileron (левый стик X)
+    txData.channels[1] = mapAxisToPulse(axisY, CAL_CENTER_Y, CAL_MIN_Y, CAL_MAX_Y);   // Elevator (левый стик Y)
+    txData.channels[2] = mapAxisToPulse(axisRY, 0, -512, 512);                        // Throttle (правый стик Y)
+    txData.channels[3] = mapAxisToPulse(axisRX, 0, -512, 512);                        // Rudder (правый стик X)
+    
+    // === КНОПКИ → КАНАЛЫ 5-6 ===
+    uint16_t buttons = ctl->buttons();
+    txData.channels[4] = (buttons & 0x01) ? PULSE_MAX : PULSE_MIN;  // Кнопка A
+    txData.channels[5] = (buttons & 0x02) ? PULSE_MAX : PULSE_MIN;  // Кнопка B
+    
     txData.connected = 1;
     txData.seq = sequence++;
 
@@ -141,8 +163,10 @@ void processGamepad(ControllerPtr ctl) {
     }
 
     if (sequence % 10 == 0) {
-        Serial.printf("Sent: A1=%d, A2=%d, B=0x%02X\n", 
-                      txData.angle1, txData.angle2, txData.buttons);
+        Serial.printf("Sent: CH1=%4d CH2=%4d CH3=%4d CH4=%4d CH5=%4d CH6=%4d\n",
+                      txData.channels[0], txData.channels[1], 
+                      txData.channels[2], txData.channels[3],
+                      txData.channels[4], txData.channels[5]);
     }
 }
 
@@ -160,20 +184,19 @@ void setup() {
     Serial.begin(115200);
     delay(500);
 
-    Serial.println("=== TRANSMITTER ===");
+    Serial.println("=== TRANSMITTER (RC CHANNELS) ===");
+    Serial.printf("Channels: %d, Pulse: %d-%d us\n", RC_CHANNELS, PULSE_MIN, PULSE_MAX);
 
     pinMode(LED_PIN, OUTPUT);
     digitalWrite(LED_PIN, LED_OFF);
 
-    // Добавлено: опрос пина бинда (13)
     pinMode(BIND_PIN, INPUT_PULLUP);
     delay(50);
     if (digitalRead(BIND_PIN) == LOW) {
         isBindMode = true;
-        digitalWrite(LED_PIN, LED_ON); // Горит постоянно — ждем маяк
+        digitalWrite(LED_PIN, LED_ON);
         Serial.println("BIND MODE ON (Listening)");
     } else {
-        // Читаем сохраненный MAC, если он был записан ранее
         preferences.begin("rx_conf", true);
         if (preferences.isKey("mac")) {
             preferences.getBytes("mac", receiverMac, 6);
@@ -195,7 +218,7 @@ void setup() {
 
     esp_now_register_send_cb(OnDataSent);
     if (isBindMode) {
-        esp_now_register_recv_cb(OnDataRecv); // Регистрируем приемник только для бинда
+        esp_now_register_recv_cb(OnDataRecv);
     }
 
     memcpy(peerInfo.peer_addr, receiverMac, 6);
@@ -217,10 +240,8 @@ void setup() {
 }
 
 void loop() {
-    // Добавлено: поведение в режиме бинда
     if (isBindMode) {
         if (bindSuccess) {
-            // Мигаем при успехе
             digitalWrite(LED_PIN, (millis() / 200) % 2);
         }
         return;
