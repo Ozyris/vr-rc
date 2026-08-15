@@ -1,9 +1,10 @@
+#include "config.h"
 #include <WiFi.h>
 #include <esp_now.h>
 #include <ESP32Servo.h>
 
 // === ОТЛАДКА ===
-//#define DEBUG  // Раскомментируйте для отладки, закомментируйте для работы
+//#define DEBUG  // включается в config.h
 
 #define BIND_PIN 6
 

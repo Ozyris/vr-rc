@@ -1,10 +1,11 @@
+#include "config.h"
 #include <Bluepad32.h>
 #include <WiFi.h>
 #include <esp_now.h>
 #include <Preferences.h> 
 
 // === ОТЛАДКА ===
-//#define DEBUG  // Раскомментируйте для отладки, закомментируйте для работы
+//#define DEBUG  // включается в config.h
 
 #define BIND_PIN 13
 #define LED_PIN 22
@@ -17,13 +18,7 @@
 #define PULSE_MAX 2000
 #define PULSE_CENTER 1500
 
-// === КАЛИБРОВКА СТИКОВ ===
-#define CAL_CENTER_X 0
-#define CAL_CENTER_Y 0
-#define CAL_MIN_X -428
-#define CAL_MAX_X 440
-#define CAL_MIN_Y -436
-#define CAL_MAX_Y 452
+// === КАЛИБРОВКА СТИКОВ в config.h ===
 
 // === МАКРОСЫ ДЛЯ ОТЛАДКИ ===
 #ifdef DEBUG
