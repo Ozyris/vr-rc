@@ -3,8 +3,13 @@
 #include <ESP32Servo.h>
 
 #define BIND_PIN 6
-#define SERVO1_PIN 4
-#define SERVO2_PIN 3
+
+// === ПИНЫ ДЛЯ КАНАЛОВ 1-4 ===
+#define CH1_PIN 1   // Aileron
+#define CH2_PIN 2   // Elevator
+#define CH3_PIN 3   // Throttle
+#define CH4_PIN 4   // Rudder
+
 #define LED_PIN 8
 #define LED_ON LOW
 #define LED_OFF HIGH
@@ -19,7 +24,7 @@
 #define FAILSAFE_TIMEOUT 500
 #define FAILSAFE_CH1 PULSE_CENTER
 #define FAILSAFE_CH2 PULSE_CENTER
-#define FAILSAFE_CH3 PULSE_MIN
+#define FAILSAFE_CH3 PULSE_MIN   // Газ = 0
 #define FAILSAFE_CH4 PULSE_CENTER
 #define FAILSAFE_CH5 PULSE_MIN
 #define FAILSAFE_CH6 PULSE_MIN
@@ -37,11 +42,17 @@ struct_message rxData;
 bool isBindMode = false;
 uint8_t broadcastMac[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
 
+// === 4 СЕРВО/ВЫХОДА ===
 Servo servo1;
 Servo servo2;
+Servo servo3;
+Servo servo4;
 
+// === ТЕКУЩИЕ ЗНАЧЕНИЯ ===
 uint16_t currentCh1 = PULSE_CENTER;
 uint16_t currentCh2 = PULSE_CENTER;
+uint16_t currentCh3 = PULSE_CENTER;
+uint16_t currentCh4 = PULSE_CENTER;
 
 uint32_t packetCount = 0;
 unsigned long lastPacketTime = 0;
@@ -54,6 +65,7 @@ bool failsafeActive = false;
 unsigned long failsafeLedTime = 0;
 bool failsafeLedState = false;
 
+// === ФУНКЦИЯ ДЛЯ БЕЗОПАСНОЙ ЗАПИСИ ПУЛЬСА ===
 void writeServoPulse(Servo &servo, uint16_t pulse) {
     if (pulse < PULSE_MIN) pulse = PULSE_MIN;
     if (pulse > PULSE_MAX) pulse = PULSE_MAX;
@@ -109,22 +121,41 @@ void writeServoPulse(Servo &servo, uint16_t pulse) {
     }
 
     if (rxData.connected) {
+        // === КАНАЛ 1 ===
         if (rxData.channels[0] != currentCh1) {
             writeServoPulse(servo1, rxData.channels[0]);
             currentCh1 = rxData.channels[0];
         }
         
+        // === КАНАЛ 2 ===
         if (rxData.channels[1] != currentCh2) {
             writeServoPulse(servo2, rxData.channels[1]);
             currentCh2 = rxData.channels[1];
         }
         
+        // === КАНАЛ 3 ===
+        if (rxData.channels[2] != currentCh3) {
+            writeServoPulse(servo3, rxData.channels[2]);
+            currentCh3 = rxData.channels[2];
+        }
+        
+        // === КАНАЛ 4 ===
+        if (rxData.channels[3] != currentCh4) {
+            writeServoPulse(servo4, rxData.channels[3]);
+            currentCh4 = rxData.channels[3];
+        }
+        
         digitalWrite(LED_PIN, LED_ON);
     } else {
+        // При отключении - центрируем все
         writeServoPulse(servo1, PULSE_CENTER);
         writeServoPulse(servo2, PULSE_CENTER);
+        writeServoPulse(servo3, PULSE_CENTER);
+        writeServoPulse(servo4, PULSE_CENTER);
         currentCh1 = PULSE_CENTER;
         currentCh2 = PULSE_CENTER;
+        currentCh3 = PULSE_CENTER;
+        currentCh4 = PULSE_CENTER;
         digitalWrite(LED_PIN, LED_OFF);
     }
 
@@ -143,9 +174,13 @@ void setup() {
     Serial.begin(115200);
     delay(500);
 
-    Serial.println("=== RECEIVER (8 CHANNELS) ===");
+    Serial.println("=== RECEIVER (4 OUTPUTS) ===");
     Serial.printf("Channels: %d, Pulse: %d-%d us\n", RC_CHANNELS, PULSE_MIN, PULSE_MAX);
     Serial.printf("Failsafe timeout: %d ms\n", FAILSAFE_TIMEOUT);
+    Serial.printf("CH1: Pin %d\n", CH1_PIN);
+    Serial.printf("CH2: Pin %d\n", CH2_PIN);
+    Serial.printf("CH3: Pin %d\n", CH3_PIN);
+    Serial.printf("CH4: Pin %d\n", CH4_PIN);
 
     pinMode(LED_PIN, OUTPUT);
     digitalWrite(LED_PIN, LED_OFF);
@@ -158,15 +193,26 @@ void setup() {
         Serial.println("BIND BEACON MODE ON");
     }
 
+    // === ИНИЦИАЛИЗАЦИЯ 4 ВЫХОДОВ ===
     ESP32PWM::allocateTimer(0);
     ESP32PWM::allocateTimer(1);
+    ESP32PWM::allocateTimer(2);
+    ESP32PWM::allocateTimer(3);
+    
     servo1.setPeriodHertz(50);
     servo2.setPeriodHertz(50);
-    servo1.attach(SERVO1_PIN, PULSE_MIN, PULSE_MAX);
-    servo2.attach(SERVO2_PIN, PULSE_MIN, PULSE_MAX);
+    servo3.setPeriodHertz(50);
+    servo4.setPeriodHertz(50);
+    
+    servo1.attach(CH1_PIN, PULSE_MIN, PULSE_MAX);
+    servo2.attach(CH2_PIN, PULSE_MIN, PULSE_MAX);
+    servo3.attach(CH3_PIN, PULSE_MIN, PULSE_MAX);
+    servo4.attach(CH4_PIN, PULSE_MIN, PULSE_MAX);
     
     writeServoPulse(servo1, PULSE_CENTER);
     writeServoPulse(servo2, PULSE_CENTER);
+    writeServoPulse(servo3, PULSE_CENTER);
+    writeServoPulse(servo4, PULSE_CENTER);
 
     WiFi.mode(WIFI_STA);
     WiFi.disconnect();
@@ -210,16 +256,22 @@ void loop() {
         return;
     }
 
+    // === ПРОВЕРКА FAILSAFE ===
     unsigned long now = millis();
     if (!failsafeActive && (now - lastPacketTime > FAILSAFE_TIMEOUT)) {
         failsafeActive = true;
         writeServoPulse(servo1, FAILSAFE_CH1);
         writeServoPulse(servo2, FAILSAFE_CH2);
+        writeServoPulse(servo3, FAILSAFE_CH3);
+        writeServoPulse(servo4, FAILSAFE_CH4);
         currentCh1 = FAILSAFE_CH1;
         currentCh2 = FAILSAFE_CH2;
+        currentCh3 = FAILSAFE_CH3;
+        currentCh4 = FAILSAFE_CH4;
         
         Serial.println("!!! FAILSAFE ACTIVATED !!!");
-        Serial.printf("CH1=%d, CH2=%d\n", FAILSAFE_CH1, FAILSAFE_CH2);
+        Serial.printf("CH1=%d CH2=%d CH3=%d CH4=%d\n", 
+                      FAILSAFE_CH1, FAILSAFE_CH2, FAILSAFE_CH3, FAILSAFE_CH4);
     }
 
     if (failsafeActive) {
