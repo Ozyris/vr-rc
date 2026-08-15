@@ -9,7 +9,7 @@
 #define LED_OFF HIGH
 
 // === НАСТРОЙКИ RC КАНАЛОВ ===
-#define RC_CHANNELS 6
+#define RC_CHANNELS 8     // 8 каналов
 #define PULSE_MIN 1000    // Минимальный импульс (мкс)
 #define PULSE_MAX 2000    // Максимальный импульс (мкс)
 #define PULSE_CENTER 1500 // Центральное положение (мкс)
@@ -27,12 +27,11 @@ bool isBindMode = false;
 bool bindSuccess = false;   
 Preferences preferences;   
 
-// === НОВАЯ СТРУКТУРА С RC КАНАЛАМИ ===
 typedef struct {
-    uint16_t channels[RC_CHANNELS]; // 6 каналов (12 байт)
-    uint8_t connected;              // 1 байт
-    uint32_t seq;                   // 4 байта
-} struct_message;                   // ИТОГО: 17 байт
+    uint16_t channels[RC_CHANNELS];
+    uint8_t connected;
+    uint32_t seq;
+} struct_message;
 
 struct_message txData;
 esp_now_peer_info_t peerInfo;
@@ -44,14 +43,11 @@ uint32_t sequence = 0;
 
 const int DEAD_ZONE = 10;
 
-// === ФУНКЦИЯ: ось (-512..512) -> импульс (1000..2000) ===
 uint16_t mapAxisToPulse(int axisValue, int center, int minVal, int maxVal) {
-    // Применяем мертвую зону
     if (abs(axisValue - center) < DEAD_ZONE) {
         return PULSE_CENTER;
     }
     
-    // Преобразуем в импульс
     int pulse;
     if (axisValue < center) {
         pulse = map(axisValue, minVal, center, PULSE_MIN, PULSE_CENTER);
@@ -59,7 +55,6 @@ uint16_t mapAxisToPulse(int axisValue, int center, int minVal, int maxVal) {
         pulse = map(axisValue, center, maxVal, PULSE_CENTER, PULSE_MAX);
     }
     
-    // Ограничиваем
     if (pulse < PULSE_MIN) pulse = PULSE_MIN;
     if (pulse > PULSE_MAX) pulse = PULSE_MAX;
     
@@ -137,21 +132,23 @@ void processGamepad(ControllerPtr ctl) {
     if (!sendFinished) return;
 
     // === ЧИТАЕМ ОСИ ===
-    int axisX = ctl->axisX();   // -512..512 (левый стик X)
-    int axisY = ctl->axisY();   // -512..512 (левый стик Y)
-    int axisRX = ctl->axisRX(); // -512..512 (правый стик X)
-    int axisRY = ctl->axisRY(); // -512..512 (правый стик Y)
+    int axisX = ctl->axisX();
+    int axisY = ctl->axisY();
+    int axisRX = ctl->axisRX();
+    int axisRY = ctl->axisRY();
     
-    // === ЗАПОЛНЯЕМ КАНАЛЫ ===
-    txData.channels[0] = mapAxisToPulse(axisX, CAL_CENTER_X, CAL_MIN_X, CAL_MAX_X);   // Aileron (левый стик X)
-    txData.channels[1] = mapAxisToPulse(axisY, CAL_CENTER_Y, CAL_MIN_Y, CAL_MAX_Y);   // Elevator (левый стик Y)
-    txData.channels[2] = mapAxisToPulse(axisRY, 0, -512, 512);                        // Throttle (правый стик Y)
-    txData.channels[3] = mapAxisToPulse(axisRX, 0, -512, 512);                        // Rudder (правый стик X)
+    // === ЗАПОЛНЯЕМ КАНАЛЫ 1-4 ===
+    txData.channels[0] = mapAxisToPulse(axisX, CAL_CENTER_X, CAL_MIN_X, CAL_MAX_X);   // Aileron
+    txData.channels[1] = mapAxisToPulse(axisY, CAL_CENTER_Y, CAL_MIN_Y, CAL_MAX_Y);   // Elevator
+    txData.channels[2] = mapAxisToPulse(axisRY, 0, -512, 512);                        // Throttle
+    txData.channels[3] = mapAxisToPulse(axisRX, 0, -512, 512);                        // Rudder
     
-    // === КНОПКИ → КАНАЛЫ 5-6 ===
+    // === КНОПКИ → КАНАЛЫ 5-8 ===
     uint16_t buttons = ctl->buttons();
-    txData.channels[4] = (buttons & 0x01) ? PULSE_MAX : PULSE_MIN;  // Кнопка A
-    txData.channels[5] = (buttons & 0x02) ? PULSE_MAX : PULSE_MIN;  // Кнопка B
+    txData.channels[4] = (buttons & 0x0010) ? PULSE_MAX : PULSE_MIN;  // Канал 5: кнопка 0x0010
+    txData.channels[5] = (buttons & 0x0020) ? PULSE_MAX : PULSE_MIN;  // Канал 6: кнопка 0x0020
+    txData.channels[6] = (buttons & 0x0001) ? PULSE_MAX : PULSE_MIN;  // Канал 7: кнопка 0x0001
+    txData.channels[7] = (buttons & 0x0002) ? PULSE_MAX : PULSE_MIN;  // Канал 8: кнопка 0x0002
     
     txData.connected = 1;
     txData.seq = sequence++;
@@ -163,10 +160,11 @@ void processGamepad(ControllerPtr ctl) {
     }
 
     if (sequence % 10 == 0) {
-        Serial.printf("Sent: CH1=%4d CH2=%4d CH3=%4d CH4=%4d CH5=%4d CH6=%4d\n",
+        Serial.printf("Sent: CH1=%4d CH2=%4d CH3=%4d CH4=%4d CH5=%4d CH6=%4d CH7=%4d CH8=%4d\n",
                       txData.channels[0], txData.channels[1], 
                       txData.channels[2], txData.channels[3],
-                      txData.channels[4], txData.channels[5]);
+                      txData.channels[4], txData.channels[5],
+                      txData.channels[6], txData.channels[7]);
     }
 }
 
@@ -184,7 +182,7 @@ void setup() {
     Serial.begin(115200);
     delay(500);
 
-    Serial.println("=== TRANSMITTER (RC CHANNELS) ===");
+    Serial.println("=== TRANSMITTER (8 CHANNELS) ===");
     Serial.printf("Channels: %d, Pulse: %d-%d us\n", RC_CHANNELS, PULSE_MIN, PULSE_MAX);
 
     pinMode(LED_PIN, OUTPUT);

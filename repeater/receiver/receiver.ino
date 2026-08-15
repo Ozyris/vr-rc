@@ -10,7 +10,7 @@
 #define LED_OFF HIGH
 
 // === НАСТРОЙКИ RC КАНАЛОВ ===
-#define RC_CHANNELS 6
+#define RC_CHANNELS 8
 #define PULSE_MIN 1000
 #define PULSE_MAX 2000
 #define PULSE_CENTER 1500
@@ -19,12 +19,14 @@
 #define FAILSAFE_TIMEOUT 500
 #define FAILSAFE_CH1 PULSE_CENTER
 #define FAILSAFE_CH2 PULSE_CENTER
-#define FAILSAFE_CH3 PULSE_MIN   // Газ = 0
+#define FAILSAFE_CH3 PULSE_MIN
 #define FAILSAFE_CH4 PULSE_CENTER
 #define FAILSAFE_CH5 PULSE_MIN
 #define FAILSAFE_CH6 PULSE_MIN
+#define FAILSAFE_CH7 PULSE_MIN
+#define FAILSAFE_CH8 PULSE_MIN
 
-// === НОВАЯ СТРУКТУРА ===
+// === СТРУКТУРА С 8 КАНАЛАМИ ===
 typedef struct {
     uint16_t channels[RC_CHANNELS];
     uint8_t connected;
@@ -52,7 +54,6 @@ bool failsafeActive = false;
 unsigned long failsafeLedTime = 0;
 bool failsafeLedState = false;
 
-// === ФУНКЦИЯ ДЛЯ БЕЗОПАСНОЙ ЗАПИСИ ПУЛЬСА ===
 void writeServoPulse(Servo &servo, uint16_t pulse) {
     if (pulse < PULSE_MIN) pulse = PULSE_MIN;
     if (pulse > PULSE_MAX) pulse = PULSE_MAX;
@@ -83,18 +84,20 @@ void writeServoPulse(Servo &servo, uint16_t pulse) {
         totalDelta += delta;
         deltaCount++;
         
-        Serial.printf("[%3lums] SEQ=%lu CH1=%4d CH2=%4d CH3=%4d CH4=%4d CH5=%4d CH6=%4d\n",
+        Serial.printf("[%3lums] SEQ=%lu CH1=%4d CH2=%4d CH3=%4d CH4=%4d CH5=%4d CH6=%4d CH7=%4d CH8=%4d\n",
                       delta,
                       (unsigned long)rxData.seq,
                       rxData.channels[0], rxData.channels[1],
                       rxData.channels[2], rxData.channels[3],
-                      rxData.channels[4], rxData.channels[5]);
+                      rxData.channels[4], rxData.channels[5],
+                      rxData.channels[6], rxData.channels[7]);
     } else {
-        Serial.printf("[FIRST] SEQ=%lu CH1=%4d CH2=%4d CH3=%4d CH4=%4d CH5=%4d CH6=%4d\n",
+        Serial.printf("[FIRST] SEQ=%lu CH1=%4d CH2=%4d CH3=%4d CH4=%4d CH5=%4d CH6=%4d CH7=%4d CH8=%4d\n",
                       (unsigned long)rxData.seq,
                       rxData.channels[0], rxData.channels[1],
                       rxData.channels[2], rxData.channels[3],
-                      rxData.channels[4], rxData.channels[5]);
+                      rxData.channels[4], rxData.channels[5],
+                      rxData.channels[6], rxData.channels[7]);
     }
     
     lastPacketTime = now;
@@ -106,7 +109,6 @@ void writeServoPulse(Servo &servo, uint16_t pulse) {
     }
 
     if (rxData.connected) {
-        // Обновляем сервы только если изменились
         if (rxData.channels[0] != currentCh1) {
             writeServoPulse(servo1, rxData.channels[0]);
             currentCh1 = rxData.channels[0];
@@ -141,7 +143,7 @@ void setup() {
     Serial.begin(115200);
     delay(500);
 
-    Serial.println("=== RECEIVER (RC CHANNELS) ===");
+    Serial.println("=== RECEIVER (8 CHANNELS) ===");
     Serial.printf("Channels: %d, Pulse: %d-%d us\n", RC_CHANNELS, PULSE_MIN, PULSE_MAX);
     Serial.printf("Failsafe timeout: %d ms\n", FAILSAFE_TIMEOUT);
 
@@ -208,7 +210,6 @@ void loop() {
         return;
     }
 
-    // Проверка Failsafe
     unsigned long now = millis();
     if (!failsafeActive && (now - lastPacketTime > FAILSAFE_TIMEOUT)) {
         failsafeActive = true;
