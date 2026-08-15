@@ -52,6 +52,13 @@ uint32_t sequence = 0;
 
 const int DEAD_ZONE = 10;
 
+// === ПЕРЕМЕННЫЕ ДЛЯ ГАЗА (VRBOX) ===
+#ifdef VRBOX
+  uint16_t currentThrottle = THROTTLE_DEFAULT;
+  unsigned long lastThrottleChange = 0;
+  const unsigned long THROTTLE_DEBOUNCE = 100; // Защита от дребезга (мс)
+#endif
+
 uint16_t mapAxisToPulse(int axisValue, int center, int minVal, int maxVal) {
     if (abs(axisValue - center) < DEAD_ZONE) {
         return PULSE_CENTER;
@@ -144,17 +151,48 @@ void processGamepad(ControllerPtr ctl) {
     int axisY = ctl->axisY();
     int axisRX = ctl->axisRX();
     int axisRY = ctl->axisRY();
+    uint16_t buttons = ctl->buttons();
     
+    // === КАНАЛЫ 1-2 (Aileron, Elevator) ===
     txData.channels[0] = mapAxisToPulse(axisX, CAL_CENTER_X, CAL_MIN_X, CAL_MAX_X);
     txData.channels[1] = mapAxisToPulse(axisY, CAL_CENTER_Y, CAL_MIN_Y, CAL_MAX_Y);
-    txData.channels[2] = mapAxisToPulse(axisRY, 0, -512, 512);
+    
+    // === КАНАЛ 4 (Rudder) ===
     txData.channels[3] = mapAxisToPulse(axisRX, 0, -512, 512);
     
-    uint16_t buttons = ctl->buttons();
-    txData.channels[4] = (buttons & 0x0010) ? PULSE_MAX : PULSE_MIN;
-    txData.channels[5] = (buttons & 0x0020) ? PULSE_MAX : PULSE_MIN;
-    txData.channels[6] = (buttons & 0x0001) ? PULSE_MAX : PULSE_MIN;
-    txData.channels[7] = (buttons & 0x0002) ? PULSE_MAX : PULSE_MIN;
+    // === КАНАЛ 3 (Throttle) ===
+    #ifdef VRBOX
+      // VRBOX: управление газом кнопками 0x0020 и 0x0010
+      unsigned long now = millis();
+      
+      // Кнопка 0x0020 - увеличиваем газ
+      if ((buttons & 0x0020) && (now - lastThrottleChange > THROTTLE_DEBOUNCE)) {
+          lastThrottleChange = now;
+          currentThrottle += THROTTLE_STEP;
+          if (currentThrottle > THROTTLE_MAX) currentThrottle = THROTTLE_MAX;
+          DEBUG_PRINTF("Throttle UP: %d\n", currentThrottle);
+      }
+      
+      // Кнопка 0x0010 - уменьшаем газ
+      if ((buttons & 0x0010) && (now - lastThrottleChange > THROTTLE_DEBOUNCE)) {
+          lastThrottleChange = now;
+          currentThrottle -= THROTTLE_STEP;
+          if (currentThrottle < THROTTLE_MIN) currentThrottle = THROTTLE_MIN;
+          DEBUG_PRINTF("Throttle DOWN: %d\n", currentThrottle);
+      }
+      
+      txData.channels[2] = currentThrottle;
+      
+    #else
+      // Стандартный геймпад: газ на правом стике Y
+      txData.channels[2] = mapAxisToPulse(axisRY, 0, -512, 512);
+    #endif
+    
+    // === КНОПКИ → КАНАЛЫ 5-8 ===
+    txData.channels[4] = (buttons & 0x0001) ? PULSE_MAX : PULSE_MIN;
+    txData.channels[5] = (buttons & 0x0002) ? PULSE_MAX : PULSE_MIN;
+    txData.channels[6] = (buttons & 0x0004) ? PULSE_MAX : PULSE_MIN;
+    txData.channels[7] = (buttons & 0x0008) ? PULSE_MAX : PULSE_MIN;
     
     txData.connected = 1;
     txData.seq = sequence++;
@@ -192,6 +230,11 @@ void setup() {
 
     #ifdef DEBUG
       Serial.println("=== TRANSMITTER (8 CHANNELS) ===");
+      #ifdef VRBOX
+        Serial.println("Mode: VRBOX (Throttle with buttons)");
+      #else
+        Serial.println("Mode: GAMEPAD (Throttle on right stick)");
+      #endif
       Serial.printf("Channels: %d, Pulse: %d-%d us\n", RC_CHANNELS, PULSE_MIN, PULSE_MAX);
     #endif
 
