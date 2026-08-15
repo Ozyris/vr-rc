@@ -2,12 +2,16 @@
 #include <esp_now.h>
 #include <ESP32Servo.h>
 
-#define BIND_PIN 6        // пин для режима маяка на приемнике
+#define BIND_PIN 6
 #define SERVO1_PIN 4
 #define SERVO2_PIN 3
 #define LED_PIN 8
 #define LED_ON LOW
 #define LED_OFF HIGH
+
+#define FAILSAFE_TIMEOUT 500
+#define FAILSAFE_ANGLE1 90
+#define FAILSAFE_ANGLE2 90
 
 typedef struct {
     uint8_t angle1;
@@ -18,8 +22,8 @@ typedef struct {
 } struct_message;
 
 struct_message rxData;
-bool isBindMode = false;  // Добавлено
-uint8_t broadcastMac[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF}; // Добавлено
+bool isBindMode = false;
+uint8_t broadcastMac[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
 
 Servo servo1;
 Servo servo2;
@@ -34,12 +38,16 @@ unsigned long maxDelta = 0;
 unsigned long totalDelta = 0;
 int deltaCount = 0;
 
+bool failsafeActive = false;
+unsigned long failsafeLedTime = 0;
+bool failsafeLedState = false;
+
 #if ESP_IDF_VERSION_MAJOR >= 5
   void OnDataRecv(const esp_now_recv_info *info, const uint8_t *incomingData, int len) {
 #else
   void OnDataRecv(const uint8_t *mac, const uint8_t *incomingData, int len) {
 #endif
-    if (isBindMode) return; // Игнорируем входящие данные в режиме бинда
+    if (isBindMode) return;
     
     unsigned long now = millis();
     
@@ -50,7 +58,8 @@ int deltaCount = 0;
 
     memcpy(&rxData, incomingData, sizeof(rxData));
     packetCount++;
-
+    
+    // === ВЫЧИСЛЯЕМ ДЕЛЬТУ ДО ОБНОВЛЕНИЯ lastPacketTime ===
     if (lastPacketTime > 0) {
         unsigned long delta = now - lastPacketTime;
         if (delta < minDelta) minDelta = delta;
@@ -67,8 +76,18 @@ int deltaCount = 0;
                       (unsigned long)rxData.seq,
                       rxData.angle1, rxData.angle2);
     }
+    
+    // === ОБНОВЛЯЕМ lastPacketTime ПОСЛЕ ВЫЧИСЛЕНИЯ ДЕЛЬТЫ ===
     lastPacketTime = now;
 
+    // Сбрасываем Failsafe
+    if (failsafeActive) {
+        failsafeActive = false;
+        digitalWrite(LED_PIN, LED_ON);
+        Serial.println("Failsafe: connection restored");
+    }
+
+    // Обновляем сервы
     if (rxData.connected) {
         if (rxData.angle1 != currentAngle1) {
             servo1.write(rxData.angle1);
@@ -105,16 +124,17 @@ void setup() {
     delay(500);
 
     Serial.println("=== RECEIVER ===");
+    Serial.printf("Failsafe timeout: %d ms\n", FAILSAFE_TIMEOUT);
+    Serial.printf("Failsafe angles: S1=%d, S2=%d\n", FAILSAFE_ANGLE1, FAILSAFE_ANGLE2);
 
     pinMode(LED_PIN, OUTPUT);
     digitalWrite(LED_PIN, LED_OFF);
 
-    // Добавлено: опрос пина бинда (6)
     pinMode(BIND_PIN, INPUT_PULLUP);
     delay(50);
     if (digitalRead(BIND_PIN) == LOW) {
         isBindMode = true;
-        digitalWrite(LED_PIN, LED_ON); // Горит постоянно — режим маяка
+        digitalWrite(LED_PIN, LED_ON);
         Serial.println("BIND BEACON MODE ON");
     }
 
@@ -141,7 +161,6 @@ void setup() {
 
     esp_now_register_recv_cb(OnDataRecv);
     
-    // Добавлено: регистрируем широковещательный адрес, если мы маяк
     if (isBindMode) {
         esp_now_peer_info_t peerInfo = {};
         memcpy(peerInfo.peer_addr, broadcastMac, 6);
@@ -155,17 +174,37 @@ void setup() {
 }
 
 void loop() {
-    // Добавлено: посылка маяка в режиме бинда
     if (isBindMode) {
         static unsigned long lastBeacon = 0;
         if (millis() - lastBeacon > 300) {
             lastBeacon = millis();
-            struct_message beaconMsg = {90, 90, 0, 3, 0}; // connected = 3 (маркер маяка)
+            struct_message beaconMsg = {90, 90, 0, 3, 0};
             esp_now_send(broadcastMac, (uint8_t *)&beaconMsg, sizeof(beaconMsg));
         }
         delay(10);
         return;
     }
 
+    // Проверка Failsafe
+    unsigned long now = millis();
+    if (!failsafeActive && (now - lastPacketTime > FAILSAFE_TIMEOUT)) {
+        failsafeActive = true;
+        servo1.write(FAILSAFE_ANGLE1);
+        servo2.write(FAILSAFE_ANGLE2);
+        currentAngle1 = FAILSAFE_ANGLE1;
+        currentAngle2 = FAILSAFE_ANGLE2;
+        
+        Serial.println("!!! FAILSAFE ACTIVATED !!!");
+        Serial.printf("Servos set to: S1=%d, S2=%d\n", FAILSAFE_ANGLE1, FAILSAFE_ANGLE2);
+    }
+
+    if (failsafeActive) {
+        if (millis() - failsafeLedTime > 250) {
+            failsafeLedTime = millis();
+            failsafeLedState = !failsafeLedState;
+            digitalWrite(LED_PIN, failsafeLedState ? LED_ON : LED_OFF);
+        }
+    }
+    
     delay(10);
 }
