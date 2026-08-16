@@ -1,11 +1,9 @@
 #include "config.h"
+#include "mixer.h"
 #include <Bluepad32.h>
 #include <WiFi.h>
 #include <esp_now.h>
 #include <Preferences.h> 
-
-// === ОТЛАДКА ===
-//#define DEBUG  // включается в config.h
 
 #define BIND_PIN 13
 #define LED_PIN 22
@@ -14,11 +12,6 @@
 
 // === НАСТРОЙКИ RC КАНАЛОВ ===
 #define RC_CHANNELS 8
-#define PULSE_MIN 1000
-#define PULSE_MAX 2000
-#define PULSE_CENTER 1500
-
-// === КАЛИБРОВКА СТИКОВ в config.h ===
 
 // === МАКРОСЫ ДЛЯ ОТЛАДКИ ===
 #ifdef DEBUG
@@ -153,19 +146,19 @@ void processGamepad(ControllerPtr ctl) {
     int axisRY = ctl->axisRY();
     uint16_t buttons = ctl->buttons();
     
-    // === КАНАЛЫ 1-2 (Aileron, Elevator) ===
+    // === ЗАПОЛНЯЕМ ИСХОДНЫЕ ДАННЫЕ ===
+    // Каналы 1-2 (Aileron, Elevator)
     txData.channels[0] = mapAxisToPulse(axisX, CAL_CENTER_X, CAL_MIN_X, CAL_MAX_X);
     txData.channels[1] = mapAxisToPulse(axisY, CAL_CENTER_Y, CAL_MIN_Y, CAL_MAX_Y);
     
-    // === КАНАЛ 4 (Rudder) ===
+    // Канал 4 (Rudder)
     txData.channels[3] = mapAxisToPulse(axisRX, 0, -512, 512);
     
-    // === КАНАЛ 3 (Throttle) ===
+    // Канал 3 (Throttle)
     #ifdef VRBOX
       // VRBOX: управление газом кнопками 0x0020 и 0x0010
       unsigned long now = millis();
       
-      // Кнопка 0x0020 - увеличиваем газ
       if ((buttons & 0x0020) && (now - lastThrottleChange > THROTTLE_DEBOUNCE)) {
           lastThrottleChange = now;
           currentThrottle += THROTTLE_STEP;
@@ -173,7 +166,6 @@ void processGamepad(ControllerPtr ctl) {
           DEBUG_PRINTF("Throttle UP: %d\n", currentThrottle);
       }
       
-      // Кнопка 0x0010 - уменьшаем газ
       if ((buttons & 0x0010) && (now - lastThrottleChange > THROTTLE_DEBOUNCE)) {
           lastThrottleChange = now;
           currentThrottle -= THROTTLE_STEP;
@@ -188,11 +180,33 @@ void processGamepad(ControllerPtr ctl) {
       txData.channels[2] = mapAxisToPulse(axisRY, 0, -512, 512);
     #endif
     
-    // === КНОПКИ → КАНАЛЫ 5-8 ===
+    // Каналы 5-8 (кнопки)
     txData.channels[4] = (buttons & 0x0001) ? PULSE_MAX : PULSE_MIN;
     txData.channels[5] = (buttons & 0x0002) ? PULSE_MAX : PULSE_MIN;
     txData.channels[6] = (buttons & 0x0004) ? PULSE_MAX : PULSE_MIN;
     txData.channels[7] = (buttons & 0x0008) ? PULSE_MAX : PULSE_MIN;
+    
+    // === ПРИМЕНЯЕМ МИКШЕР ===
+    MixerData input;
+    MixerData output;
+    
+    // Копируем данные в структуру микшера
+    for (int i = 0; i < RC_CHANNELS; i++) {
+        input.channels[i] = txData.channels[i];
+    }
+    
+    // Вызываем микшер
+    applyMixer(&input, &output);
+    
+    // Копируем результат обратно
+    for (int i = 0; i < RC_CHANNELS; i++) {
+        txData.channels[i] = output.channels[i];
+    }
+    
+    // Отладочный вывод микшера
+    #ifdef DEBUG
+      printMixerInfo(&output);
+    #endif
     
     txData.connected = 1;
     txData.seq = sequence++;

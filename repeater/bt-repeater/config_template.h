@@ -1,9 +1,12 @@
+// config.h
+
 // === ОТЛАДКА ===
 #define DEBUG
 
 // === ТИП КОНТРОЛЛЕРА ===
-//#define VRBOX
-//#define GAMEPAD
+// Раскомментируйте нужный тип
+#define VRBOX      // VRBOX контроллер (газ кнопками)
+//#define GAMEPAD    // Стандартный геймпад (газ на правом стике)
 
 // === КАЛИБРОВКА СТИКОВ ===
 #define CAL_CENTER_X 0
@@ -12,3 +15,9 @@
 #define CAL_MAX_X 440
 #define CAL_MIN_Y -436
 #define CAL_MAX_Y 452
+
+// === НАСТРОЙКИ ГАЗА ДЛЯ VRBOX ===
+#define THROTTLE_STEP 50      // Шаг изменения газа (мкс)
+#define THROTTLE_MIN 1000     // Минимальный газ
+#define THROTTLE_MAX 2000     // Максимальный газ
+#define THROTTLE_DEFAULT 1000 // Газ по умолчанию (0%)
