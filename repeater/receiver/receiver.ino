@@ -3,9 +3,6 @@
 #include <esp_now.h>
 #include <ESP32Servo.h>
 
-// === ОТЛАДКА ===
-//#define DEBUG  // включается в config.h
-
 #define BIND_PIN 6
 
 // === ПИНЫ ДЛЯ КАНАЛОВ 1-4 ===
@@ -23,17 +20,6 @@
 #define PULSE_MIN 1000
 #define PULSE_MAX 2000
 #define PULSE_CENTER 1500
-
-// === НАСТРОЙКИ FAILSAFE ===
-#define FAILSAFE_TIMEOUT 500
-#define FAILSAFE_CH1 PULSE_CENTER
-#define FAILSAFE_CH2 PULSE_CENTER
-#define FAILSAFE_CH3 PULSE_MIN
-#define FAILSAFE_CH4 PULSE_CENTER
-#define FAILSAFE_CH5 PULSE_MIN
-#define FAILSAFE_CH6 PULSE_MIN
-#define FAILSAFE_CH7 PULSE_MIN
-#define FAILSAFE_CH8 PULSE_MIN
 
 // === МАКРОСЫ ДЛЯ ОТЛАДКИ ===
 #ifdef DEBUG
