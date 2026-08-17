@@ -47,10 +47,10 @@ Servo servo2;
 Servo servo3;
 Servo servo4;
 
-uint16_t currentCh1 = PULSE_CENTER;
-uint16_t currentCh2 = PULSE_CENTER;
-uint16_t currentCh3 = PULSE_CENTER;
-uint16_t currentCh4 = PULSE_CENTER;
+uint16_t currentCh1 = FAILSAFE_CH1;
+uint16_t currentCh2 = FAILSAFE_CH2;
+uint16_t currentCh3 = FAILSAFE_CH3;
+uint16_t currentCh4 = FAILSAFE_CH4;
 
 uint32_t packetCount = 0;
 unsigned long lastPacketTime = 0;
@@ -142,14 +142,14 @@ void writeServoPulse(Servo &servo, uint16_t pulse) {
         
         digitalWrite(LED_PIN, LED_ON);
     } else {
-        writeServoPulse(servo1, PULSE_CENTER);
-        writeServoPulse(servo2, PULSE_CENTER);
-        writeServoPulse(servo3, PULSE_CENTER);
-        writeServoPulse(servo4, PULSE_CENTER);
-        currentCh1 = PULSE_CENTER;
-        currentCh2 = PULSE_CENTER;
-        currentCh3 = PULSE_CENTER;
-        currentCh4 = PULSE_CENTER;
+        writeServoPulse(servo1, FAILSAFE_CH1);
+        writeServoPulse(servo2, FAILSAFE_CH2);
+        writeServoPulse(servo3, FAILSAFE_CH3);
+        writeServoPulse(servo4, FAILSAFE_CH4);
+        currentCh1 = FAILSAFE_CH1;
+        currentCh2 = FAILSAFE_CH2;
+        currentCh3 = FAILSAFE_CH3;
+        currentCh4 = FAILSAFE_CH4;
         digitalWrite(LED_PIN, LED_OFF);
     }
 
@@ -206,10 +206,10 @@ void setup() {
     servo3.attach(CH3_PIN, PULSE_MIN, PULSE_MAX);
     servo4.attach(CH4_PIN, PULSE_MIN, PULSE_MAX);
     
-    writeServoPulse(servo1, PULSE_CENTER);
-    writeServoPulse(servo2, PULSE_CENTER);
-    writeServoPulse(servo3, PULSE_CENTER);
-    writeServoPulse(servo4, PULSE_CENTER);
+    writeServoPulse(servo1, FAILSAFE_CH1);
+    writeServoPulse(servo2, FAILSAFE_CH2);
+    writeServoPulse(servo3, FAILSAFE_CH3);
+    writeServoPulse(servo4, FAILSAFE_CH4);
 
     WiFi.mode(WIFI_STA);
     WiFi.disconnect();
