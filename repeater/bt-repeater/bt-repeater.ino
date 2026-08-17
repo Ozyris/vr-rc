@@ -13,6 +13,9 @@
 // === НАСТРОЙКИ RC КАНАЛОВ ===
 #define RC_CHANNELS 8
 
+// === НАСТРОЙКИ ТАЙМАУТА КОНТРОЛЛЕРА ===
+#define CONTROLLER_TIMEOUT 2000  // 2 секунды без данных от контроллера
+
 // === МАКРОСЫ ДЛЯ ОТЛАДКИ ===
 #ifdef DEBUG
   #define DEBUG_PRINT(...) Serial.print(__VA_ARGS__)
@@ -45,11 +48,15 @@ uint32_t sequence = 0;
 
 const int DEAD_ZONE = 10;
 
+// === ПЕРЕМЕННЫЕ ДЛЯ КОНТРОЛЛЯ ПОДКЛЮЧЕНИЯ ===
+bool controllerReallyConnected = false;
+unsigned long lastValidDataTime = 0;
+
 // === ПЕРЕМЕННЫЕ ДЛЯ ГАЗА (VRBOX) ===
 #ifdef VRBOX
   uint16_t currentThrottle = THROTTLE_DEFAULT;
   unsigned long lastThrottleChange = 0;
-  const unsigned long THROTTLE_DEBOUNCE = 100; // Защита от дребезга (мс)
+  const unsigned long THROTTLE_DEBOUNCE = 100;
 #endif
 
 uint16_t mapAxisToPulse(int axisValue, int center, int minVal, int maxVal) {
@@ -112,6 +119,8 @@ void onConnectedController(ControllerPtr ctl) {
             DEBUG_PRINTF("Controller connected, index=%d\n", i);
             myControllers[i] = ctl;
             foundEmptySlot = true;
+            controllerReallyConnected = true;
+            lastValidDataTime = millis();
             digitalWrite(LED_PIN, LED_ON);
             break;
         }
@@ -128,6 +137,7 @@ void onDisconnectedController(ControllerPtr ctl) {
                 if (myControllers[j] != nullptr) anyConnected = true;
             }
             if (!anyConnected) {
+                controllerReallyConnected = false;
                 digitalWrite(LED_PIN, LED_OFF);
                 txData.connected = 0;
                 esp_now_send(receiverMac, (uint8_t *)&txData, sizeof(txData));
@@ -137,8 +147,38 @@ void onDisconnectedController(ControllerPtr ctl) {
     }
 }
 
+bool isValidData(ControllerPtr ctl) {
+    int axisX = ctl->axisX();
+    int axisY = ctl->axisY();
+    int axisRX = ctl->axisRX();
+    int axisRY = ctl->axisRY();
+    
+    // Проверяем диапазон осей
+    if (axisX < -512 || axisX > 512) return false;
+    if (axisY < -512 || axisY > 512) return false;
+    if (axisRX < -512 || axisRX > 512) return false;
+    if (axisRY < -512 || axisRY > 512) return false;
+    
+    return true;
+}
+
 void processGamepad(ControllerPtr ctl) {
     if (!sendFinished) return;
+    
+    // === ПРОВЕРКА: контроллер реально подключен ===
+    if (!controllerReallyConnected) {
+        DEBUG_PRINTLN("Controller not connected - skipping send");
+        return;
+    }
+    
+    // === ПРОВЕРКА: валидность данных ===
+    if (!isValidData(ctl)) {
+        DEBUG_PRINTLN("Invalid data from controller - skipping");
+        return;
+    }
+    
+    // Обновляем время последних валидных данных
+    lastValidDataTime = millis();
 
     int axisX = ctl->axisX();
     int axisY = ctl->axisY();
@@ -147,16 +187,11 @@ void processGamepad(ControllerPtr ctl) {
     uint16_t buttons = ctl->buttons();
     
     // === ЗАПОЛНЯЕМ ИСХОДНЫЕ ДАННЫЕ ===
-    // Каналы 1-2 (Aileron, Elevator)
     txData.channels[0] = mapAxisToPulse(axisX, CAL_CENTER_X, CAL_MIN_X, CAL_MAX_X);
     txData.channels[1] = mapAxisToPulse(axisY, CAL_CENTER_Y, CAL_MIN_Y, CAL_MAX_Y);
-    
-    // Канал 4 (Rudder)
     txData.channels[3] = mapAxisToPulse(axisRX, 0, -512, 512);
     
-    // Канал 3 (Throttle)
     #ifdef VRBOX
-      // VRBOX: управление газом кнопками 0x0020 и 0x0010
       unsigned long now = millis();
       
       if ((buttons & 0x0020) && (now - lastThrottleChange > THROTTLE_DEBOUNCE)) {
@@ -176,11 +211,9 @@ void processGamepad(ControllerPtr ctl) {
       txData.channels[2] = currentThrottle;
       
     #else
-      // Стандартный геймпад: газ на правом стике Y
       txData.channels[2] = mapAxisToPulse(axisRY, 0, -512, 512);
     #endif
     
-    // Каналы 5-8 (кнопки)
     txData.channels[4] = (buttons & 0x0001) ? PULSE_MAX : PULSE_MIN;
     txData.channels[5] = (buttons & 0x0002) ? PULSE_MAX : PULSE_MIN;
     txData.channels[6] = (buttons & 0x0004) ? PULSE_MAX : PULSE_MIN;
@@ -190,20 +223,16 @@ void processGamepad(ControllerPtr ctl) {
     MixerData input;
     MixerData output;
     
-    // Копируем данные в структуру микшера
     for (int i = 0; i < RC_CHANNELS; i++) {
         input.channels[i] = txData.channels[i];
     }
     
-    // Вызываем микшер
     applyMixer(&input, &output);
     
-    // Копируем результат обратно
     for (int i = 0; i < RC_CHANNELS; i++) {
         txData.channels[i] = output.channels[i];
     }
     
-    // Отладочный вывод микшера
     #ifdef DEBUG
       printMixerInfo(&output);
     #endif
@@ -250,6 +279,7 @@ void setup() {
         Serial.println("Mode: GAMEPAD (Throttle on right stick)");
       #endif
       Serial.printf("Channels: %d, Pulse: %d-%d us\n", RC_CHANNELS, PULSE_MIN, PULSE_MAX);
+      Serial.printf("Controller timeout: %d ms\n", CONTROLLER_TIMEOUT);
     #endif
 
     pinMode(LED_PIN, OUTPUT);
@@ -329,5 +359,16 @@ void loop() {
     if (dataUpdated) {
         processControllers();
     }
+    
+    // === ТАЙМАУТ КОНТРОЛЛЕРА ===
+    // Если контроллер был подключен, но давно нет данных - отправляем сигнал отключения
+    if (controllerReallyConnected && (millis() - lastValidDataTime > CONTROLLER_TIMEOUT)) {
+        controllerReallyConnected = false;
+        digitalWrite(LED_PIN, LED_OFF);
+        txData.connected = 0;
+        esp_now_send(receiverMac, (uint8_t *)&txData, sizeof(txData));
+        DEBUG_PRINTLN("Controller timeout - disconnecting");
+    }
+    
     delay(5);
 }
