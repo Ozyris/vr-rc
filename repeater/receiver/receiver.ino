@@ -21,6 +21,9 @@
 #define PULSE_MAX 2000
 #define PULSE_CENTER 1500
 
+// === НАСТРОЙКИ ЗАЩИТЫ ===
+#define PACKETS_TO_RESTORE 5  // Количество пакетов для восстановления из Failsafe
+
 // === МАКРОСЫ ДЛЯ ОТЛАДКИ ===
 #ifdef DEBUG
   #define DEBUG_PRINT(...) Serial.print(__VA_ARGS__)
@@ -54,6 +57,7 @@ uint16_t currentCh4 = FAILSAFE_CH4;
 
 uint32_t packetCount = 0;
 unsigned long lastPacketTime = 0;
+uint32_t lastValidSeq = 0;
 unsigned long minDelta = 9999;
 unsigned long maxDelta = 0;
 unsigned long totalDelta = 0;
@@ -62,6 +66,9 @@ int deltaCount = 0;
 bool failsafeActive = false;
 unsigned long failsafeLedTime = 0;
 bool failsafeLedState = false;
+
+// === ПЕРЕМЕННЫЕ ДЛЯ ЗАЩИТЫ ===
+int packetsAfterFailsafe = 0;
 
 void writeServoPulse(Servo &servo, uint16_t pulse) {
     if (pulse < PULSE_MIN) pulse = PULSE_MIN;
@@ -113,12 +120,42 @@ void writeServoPulse(Servo &servo, uint16_t pulse) {
     
     lastPacketTime = now;
 
+    // === ЗАЩИТА: восстановление из Failsafe только после 5 пакетов подряд ===
     if (failsafeActive) {
-        failsafeActive = false;
-        digitalWrite(LED_PIN, LED_ON);
-        DEBUG_PRINTLN("Failsafe: connection restored");
+        // Проверяем, что seq растет (пакет не старый)
+        if (rxData.seq > lastValidSeq) {
+            lastValidSeq = rxData.seq;
+            packetsAfterFailsafe++;
+            
+            DEBUG_PRINTF("Failsafe: packet %d/%d received\n", 
+                         packetsAfterFailsafe, PACKETS_TO_RESTORE);
+            
+            if (packetsAfterFailsafe >= PACKETS_TO_RESTORE) {
+                // Достаточно пакетов - выходим из Failsafe
+                failsafeActive = false;
+                packetsAfterFailsafe = 0;
+                digitalWrite(LED_PIN, LED_ON);
+                DEBUG_PRINTLN("Failsafe: connection restored!");
+                goto apply_data;
+            } else {
+                // Ждем еще пакетов - не применяем данные
+                return;
+            }
+        } else {
+            // "Старый" пакет - сбрасываем счетчик
+            packetsAfterFailsafe = 0;
+            DEBUG_PRINTLN("Failsafe: stale packet - resetting counter");
+            return;
+        }
+    } else {
+        // Не в Failsafe - обновляем lastValidSeq
+        if (rxData.seq > lastValidSeq) {
+            lastValidSeq = rxData.seq;
+        }
     }
 
+apply_data:
+    // === ПРИМЕНЯЕМ ДАННЫЕ ===
     if (rxData.connected) {
         if (rxData.channels[0] != currentCh1) {
             writeServoPulse(servo1, rxData.channels[0]);
@@ -174,6 +211,7 @@ void setup() {
       Serial.println("=== RECEIVER (4 OUTPUTS) ===");
       Serial.printf("Channels: %d, Pulse: %d-%d us\n", RC_CHANNELS, PULSE_MIN, PULSE_MAX);
       Serial.printf("Failsafe timeout: %d ms\n", FAILSAFE_TIMEOUT);
+      Serial.printf("Packets to restore: %d\n", PACKETS_TO_RESTORE);
       Serial.printf("CH1: Pin %d\n", CH1_PIN);
       Serial.printf("CH2: Pin %d\n", CH2_PIN);
       Serial.printf("CH3: Pin %d\n", CH3_PIN);
@@ -260,6 +298,7 @@ void loop() {
     unsigned long now = millis();
     if (!failsafeActive && (now - lastPacketTime > FAILSAFE_TIMEOUT)) {
         failsafeActive = true;
+        packetsAfterFailsafe = 0;
         writeServoPulse(servo1, FAILSAFE_CH1);
         writeServoPulse(servo2, FAILSAFE_CH2);
         writeServoPulse(servo3, FAILSAFE_CH3);
