@@ -246,15 +246,15 @@ void processGamepad(ControllerPtr ctl) {
         sendFinished = true;
     }
 
-    #ifdef DEBUG
-      if (sequence % 10 == 0) {
-        DEBUG_PRINTF("Sent: CH1=%4d CH2=%4d CH3=%4d CH4=%4d CH5=%4d CH6=%4d CH7=%4d CH8=%4d\n",
-                      txData.channels[0], txData.channels[1], 
-                      txData.channels[2], txData.channels[3],
-                      txData.channels[4], txData.channels[5],
-                      txData.channels[6], txData.channels[7]);
-      }
-    #endif
+    // #ifdef DEBUG
+    //   if (sequence % 10 == 0) {
+    //     DEBUG_PRINTF("Sent: CH1=%4d CH2=%4d CH3=%4d CH4=%4d CH5=%4d CH6=%4d CH7=%4d CH8=%4d\n",
+    //                   txData.channels[0], txData.channels[1], 
+    //                   txData.channels[2], txData.channels[3],
+    //                   txData.channels[4], txData.channels[5],
+    //                   txData.channels[6], txData.channels[7]);
+    //   }
+    // #endif
 }
 
 void processControllers() {

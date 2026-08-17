@@ -52,8 +52,8 @@ void applyMixer(MixerData *input, MixerData *output) {
 
 void printMixerInfo(MixerData *data) {
     #ifdef DEBUG
-        Serial.println("Mixer: DIFFERENTIAL THRUST");
-        Serial.printf("Scale: %d%%\n", DIFTHRST_SCALE);
+        //Serial.println("Mixer: DIFFERENTIAL THRUST");
+        //Serial.printf("Scale: %d%%\n", DIFTHRST_SCALE);
         Serial.printf("Output: CH1=%4d CH2=%4d CH3=%4d CH4=%4d CH5=%4d CH6=%4d CH7=%4d CH8=%4d\n",
                       data->channels[0], data->channels[1], 
                       data->channels[2], data->channels[3],
