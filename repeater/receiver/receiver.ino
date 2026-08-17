@@ -122,29 +122,37 @@ void writeServoPulse(Servo &servo, uint16_t pulse) {
 
     // === ЗАЩИТА: восстановление из Failsafe только после 5 пакетов подряд ===
     if (failsafeActive) {
-        // Проверяем, что seq растет (пакет не старый)
-        if (rxData.seq > lastValidSeq) {
-            lastValidSeq = rxData.seq;
-            packetsAfterFailsafe++;
-            
-            DEBUG_PRINTF("Failsafe: packet %d/%d received\n", 
-                         packetsAfterFailsafe, PACKETS_TO_RESTORE);
-            
-            if (packetsAfterFailsafe >= PACKETS_TO_RESTORE) {
-                // Достаточно пакетов - выходим из Failsafe
-                failsafeActive = false;
-                packetsAfterFailsafe = 0;
-                digitalWrite(LED_PIN, LED_ON);
-                DEBUG_PRINTLN("Failsafe: connection restored!");
-                goto apply_data;
-            } else {
-                // Ждем еще пакетов - не применяем данные
-                return;
-            }
-        } else {
-            // "Старый" пакет - сбрасываем счетчик
+        // === ЗАЩИТА ОТ ПЕРЕЗАГРУЗКИ ===
+        // Игнорируем SEQ=0 (перезагрузка ретранслятора)
+        if (rxData.seq == 0) {
+            DEBUG_PRINTLN("Failsafe: SEQ=0 detected - ignoring reset packet");
+            return;
+        }
+        
+        // Игнорируем повтор SEQ (старый пакет)
+        if (rxData.seq == lastValidSeq) {
+            DEBUG_PRINTLN("Failsafe: duplicate SEQ - ignoring");
+            return;
+        }
+        
+        // Обновляем lastValidSeq
+        lastValidSeq = rxData.seq;
+        
+        // Считаем валидные пакеты
+        packetsAfterFailsafe++;
+        DEBUG_PRINTF("Failsafe: packet %d/%d (SEQ=%lu)\n", 
+                     packetsAfterFailsafe, PACKETS_TO_RESTORE, 
+                     (unsigned long)rxData.seq);
+        
+        if (packetsAfterFailsafe >= PACKETS_TO_RESTORE) {
+            // Достаточно пакетов - выходим из Failsafe
+            failsafeActive = false;
             packetsAfterFailsafe = 0;
-            DEBUG_PRINTLN("Failsafe: stale packet - resetting counter");
+            digitalWrite(LED_PIN, LED_ON);
+            DEBUG_PRINTLN("Failsafe: connection restored!");
+            goto apply_data;
+        } else {
+            // Ждем еще пакетов - не применяем данные
             return;
         }
     } else {
