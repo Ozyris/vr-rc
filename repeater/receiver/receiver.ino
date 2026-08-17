@@ -22,7 +22,7 @@
 #define PULSE_CENTER 1500
 
 // === НАСТРОЙКИ ЗАЩИТЫ ===
-#define PACKETS_TO_RESTORE 5  // Количество пакетов для восстановления из Failsafe
+#define PACKETS_TO_RESTORE 5
 
 // === МАКРОСЫ ДЛЯ ОТЛАДКИ ===
 #ifdef DEBUG
@@ -67,8 +67,16 @@ bool failsafeActive = false;
 unsigned long failsafeLedTime = 0;
 bool failsafeLedState = false;
 
-// === ПЕРЕМЕННЫЕ ДЛЯ ЗАЩИТЫ ===
 int packetsAfterFailsafe = 0;
+
+// === ФУНКЦИЯ СГЛАЖИВАНИЯ ===
+uint16_t smoothValue(uint16_t current, uint16_t target, uint16_t maxStep) {
+    if (maxStep == 0) return target;  // Без сглаживания
+    int16_t diff = target - current;
+    if (diff > maxStep) diff = maxStep;
+    if (diff < -maxStep) diff = -maxStep;
+    return current + diff;
+}
 
 void writeServoPulse(Servo &servo, uint16_t pulse) {
     if (pulse < PULSE_MIN) pulse = PULSE_MIN;
@@ -120,70 +128,80 @@ void writeServoPulse(Servo &servo, uint16_t pulse) {
     
     lastPacketTime = now;
 
-    // === ЗАЩИТА: восстановление из Failsafe только после 5 пакетов подряд ===
+    // === ЗАЩИТА: восстановление из Failsafe ===
     if (failsafeActive) {
-        // === ЗАЩИТА ОТ ПЕРЕЗАГРУЗКИ ===
-        // Игнорируем SEQ=0 (перезагрузка ретранслятора)
         if (rxData.seq == 0) {
             DEBUG_PRINTLN("Failsafe: SEQ=0 detected - ignoring reset packet");
             return;
         }
         
-        // Игнорируем повтор SEQ (старый пакет)
         if (rxData.seq == lastValidSeq) {
             DEBUG_PRINTLN("Failsafe: duplicate SEQ - ignoring");
             return;
         }
         
-        // Обновляем lastValidSeq
         lastValidSeq = rxData.seq;
-        
-        // Считаем валидные пакеты
         packetsAfterFailsafe++;
         DEBUG_PRINTF("Failsafe: packet %d/%d (SEQ=%lu)\n", 
                      packetsAfterFailsafe, PACKETS_TO_RESTORE, 
                      (unsigned long)rxData.seq);
         
         if (packetsAfterFailsafe >= PACKETS_TO_RESTORE) {
-            // Достаточно пакетов - выходим из Failsafe
             failsafeActive = false;
             packetsAfterFailsafe = 0;
             digitalWrite(LED_PIN, LED_ON);
             DEBUG_PRINTLN("Failsafe: connection restored!");
             goto apply_data;
         } else {
-            // Ждем еще пакетов - не применяем данные
             return;
         }
     } else {
-        // Не в Failsafe - обновляем lastValidSeq
         if (rxData.seq > lastValidSeq) {
             lastValidSeq = rxData.seq;
         }
     }
 
 apply_data:
-    // === ПРИМЕНЯЕМ ДАННЫЕ ===
+    // === ПРИМЕНЯЕМ ДАННЫЕ С ИНДИВИДУАЛЬНЫМ СГЛАЖИВАНИЕМ ===
     if (rxData.connected) {
-        if (rxData.channels[0] != currentCh1) {
-            writeServoPulse(servo1, rxData.channels[0]);
-            currentCh1 = rxData.channels[0];
+        // === СГЛАЖИВАНИЕ ДЛЯ КАЖДОГО КАНАЛА ===
+        uint16_t smoothedCh1 = smoothValue(currentCh1, rxData.channels[0], SMOOTH_STEP_CH1);
+        uint16_t smoothedCh2 = smoothValue(currentCh2, rxData.channels[1], SMOOTH_STEP_CH2);
+        uint16_t smoothedCh3 = smoothValue(currentCh3, rxData.channels[2], SMOOTH_STEP_CH3);
+        uint16_t smoothedCh4 = smoothValue(currentCh4, rxData.channels[3], SMOOTH_STEP_CH4);
+        
+        // === КАНАЛ 1 ===
+        if (smoothedCh1 != currentCh1) {
+            writeServoPulse(servo1, smoothedCh1);
+            currentCh1 = smoothedCh1;
         }
         
-        if (rxData.channels[1] != currentCh2) {
-            writeServoPulse(servo2, rxData.channels[1]);
-            currentCh2 = rxData.channels[1];
+        // === КАНАЛ 2 ===
+        if (smoothedCh2 != currentCh2) {
+            writeServoPulse(servo2, smoothedCh2);
+            currentCh2 = smoothedCh2;
         }
         
-        if (rxData.channels[2] != currentCh3) {
-            writeServoPulse(servo3, rxData.channels[2]);
-            currentCh3 = rxData.channels[2];
+        // === КАНАЛ 3 ===
+        if (smoothedCh3 != currentCh3) {
+            writeServoPulse(servo3, smoothedCh3);
+            currentCh3 = smoothedCh3;
         }
         
-        if (rxData.channels[3] != currentCh4) {
-            writeServoPulse(servo4, rxData.channels[3]);
-            currentCh4 = rxData.channels[3];
+        // === КАНАЛ 4 ===
+        if (smoothedCh4 != currentCh4) {
+            writeServoPulse(servo4, smoothedCh4);
+            currentCh4 = smoothedCh4;
         }
+        
+        // Отладка сглаживания
+        #ifdef DEBUG
+            if (smoothedCh3 != rxData.channels[2] || smoothedCh4 != rxData.channels[3]) {
+                DEBUG_PRINTF("Smooth: CH3 %d->%d, CH4 %d->%d\n",
+                             rxData.channels[2], smoothedCh3,
+                             rxData.channels[3], smoothedCh4);
+            }
+        #endif
         
         digitalWrite(LED_PIN, LED_ON);
     } else {
@@ -220,6 +238,8 @@ void setup() {
       Serial.printf("Channels: %d, Pulse: %d-%d us\n", RC_CHANNELS, PULSE_MIN, PULSE_MAX);
       Serial.printf("Failsafe timeout: %d ms\n", FAILSAFE_TIMEOUT);
       Serial.printf("Packets to restore: %d\n", PACKETS_TO_RESTORE);
+      Serial.printf("Smooth steps: CH1=%d, CH2=%d, CH3=%d, CH4=%d\n",
+                     SMOOTH_STEP_CH1, SMOOTH_STEP_CH2, SMOOTH_STEP_CH3, SMOOTH_STEP_CH4);
       Serial.printf("CH1: Pin %d\n", CH1_PIN);
       Serial.printf("CH2: Pin %d\n", CH2_PIN);
       Serial.printf("CH3: Pin %d\n", CH3_PIN);
