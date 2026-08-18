@@ -1,5 +1,4 @@
 #include "config.h"
-#include "mixer.h"
 #include <Bluepad32.h>
 #include <WiFi.h>
 #include <esp_now.h>

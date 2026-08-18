@@ -13,9 +13,21 @@
 // === НАСТРОЙКИ ДИФФЕРЕНЦИАЛЬНОЙ ТЯГИ ===
 #define DIFTHRST_SCALE 50  // Масштаб рыскания (0-100%)
 
+// === НАСТРОЙКИ ДИАПАЗОНОВ МОТОРОВ ===
+#define MOTOR_PULSE_MIN 1000   // Минимальный импульс для моторов
+#define MOTOR_PULSE_MAX 1300   // Максимальный импульс для моторов
+
 typedef struct {
     uint16_t channels[MAX_CHANNELS];
 } MixerData;
+
+// Функция масштабирования для моторов
+uint16_t scaleMotorPulse(uint16_t pulse) {
+    // Преобразует 1000-2000 в MOTOR_PULSE_MIN - MOTOR_PULSE_MAX
+    if (pulse <= PULSE_MIN) return MOTOR_PULSE_MIN;
+    if (pulse >= PULSE_MAX) return MOTOR_PULSE_MAX;
+    return map(pulse, PULSE_MIN, PULSE_MAX, MOTOR_PULSE_MIN, MOTOR_PULSE_MAX);
+}
 
 // Микшер дифференциальной тяги
 void applyMixer(MixerData *input, MixerData *output) {
@@ -41,8 +53,12 @@ void applyMixer(MixerData *input, MixerData *output) {
     int16_t motorRight = throttle - yaw;  // Газ - Рыскание
     
     // Приводим к диапазону 1000-2000
-    output->channels[2] = constrain(motorLeft + PULSE_CENTER, PULSE_MIN, PULSE_MAX);   // Левый мотор
-    output->channels[3] = constrain(motorRight + PULSE_CENTER, PULSE_MIN, PULSE_MAX);  // Правый мотор
+    uint16_t rawLeft = constrain(motorLeft + PULSE_CENTER, PULSE_MIN, PULSE_MAX);
+    uint16_t rawRight = constrain(motorRight + PULSE_CENTER, PULSE_MIN, PULSE_MAX);
+    
+    // Применяем масштабирование для моторов
+    output->channels[2] = scaleMotorPulse(rawLeft);   // Левый мотор
+    output->channels[3] = scaleMotorPulse(rawRight);  // Правый мотор
     
     // Каналы 5-8 без изменений
     for (int i = 4; i < MAX_CHANNELS; i++) {
@@ -54,6 +70,7 @@ void printMixerInfo(MixerData *data) {
     #ifdef DEBUG
         //Serial.println("Mixer: DIFFERENTIAL THRUST");
         //Serial.printf("Scale: %d%%\n", DIFTHRST_SCALE);
+        //Serial.printf("Motor range: %d - %d us\n", MOTOR_PULSE_MIN, MOTOR_PULSE_MAX);
         Serial.printf("Output: CH1=%4d CH2=%4d CH3=%4d CH4=%4d CH5=%4d CH6=%4d CH7=%4d CH8=%4d\n",
                       data->channels[0], data->channels[1], 
                       data->channels[2], data->channels[3],
