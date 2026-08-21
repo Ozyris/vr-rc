@@ -13,7 +13,7 @@
 #define RC_CHANNELS 8
 
 // === НАСТРОЙКИ ТАЙМАУТА КОНТРОЛЛЕРА ===
-#define CONTROLLER_TIMEOUT 2000  // 2 секунды без данных от контроллера
+#define CONTROLLER_TIMEOUT 3000  // 3 секунды без данных от контроллера
 
 // === МАКРОСЫ ДЛЯ ОТЛАДКИ ===
 #ifdef DEBUG
@@ -48,7 +48,7 @@ uint32_t sequence = 0;
 const int DEAD_ZONE = 10;
 
 // === ПЕРЕМЕННЫЕ ДЛЯ КОНТРОЛЛЯ ПОДКЛЮЧЕНИЯ ===
-bool controllerReallyConnected = false;
+bool controllerConnected = false;
 unsigned long lastValidDataTime = 0;
 
 // === ПЕРЕМЕННЫЕ ДЛЯ ГАЗА (VRBOX) ===
@@ -118,7 +118,7 @@ void onConnectedController(ControllerPtr ctl) {
             DEBUG_PRINTF("Controller connected, index=%d\n", i);
             myControllers[i] = ctl;
             foundEmptySlot = true;
-            controllerReallyConnected = true;
+            controllerConnected = true;
             lastValidDataTime = millis();
             digitalWrite(LED_PIN, LED_ON);
             break;
@@ -136,7 +136,7 @@ void onDisconnectedController(ControllerPtr ctl) {
                 if (myControllers[j] != nullptr) anyConnected = true;
             }
             if (!anyConnected) {
-                controllerReallyConnected = false;
+                controllerConnected = false;
                 digitalWrite(LED_PIN, LED_OFF);
                 txData.connected = 0;
                 esp_now_send(receiverMac, (uint8_t *)&txData, sizeof(txData));
@@ -146,37 +146,17 @@ void onDisconnectedController(ControllerPtr ctl) {
     }
 }
 
-bool isValidData(ControllerPtr ctl) {
-    int axisX = ctl->axisX();
-    int axisY = ctl->axisY();
-    int axisRX = ctl->axisRX();
-    int axisRY = ctl->axisRY();
-    
-    // Проверяем диапазон осей
-    if (axisX < -512 || axisX > 512) return false;
-    if (axisY < -512 || axisY > 512) return false;
-    if (axisRX < -512 || axisRX > 512) return false;
-    if (axisRY < -512 || axisRY > 512) return false;
-    
-    return true;
-}
-
 void processGamepad(ControllerPtr ctl) {
     if (!sendFinished) return;
     
-    // === ПРОВЕРКА: контроллер реально подключен ===
-    if (!controllerReallyConnected) {
-        DEBUG_PRINTLN("Controller not connected - skipping send");
+    // === УПРОЩЕННАЯ ПРОВЕРКА ===
+    // Просто проверяем, что контроллер действительно подключен
+    // Без строгой проверки данных
+    if (!controllerConnected) {
         return;
     }
     
-    // === ПРОВЕРКА: валидность данных ===
-    if (!isValidData(ctl)) {
-        DEBUG_PRINTLN("Invalid data from controller - skipping");
-        return;
-    }
-    
-    // Обновляем время последних валидных данных
+    // Обновляем время последних данных
     lastValidDataTime = millis();
 
     int axisX = ctl->axisX();
@@ -244,16 +224,6 @@ void processGamepad(ControllerPtr ctl) {
     if (result != ESP_OK) {
         sendFinished = true;
     }
-
-    // #ifdef DEBUG
-    //   if (sequence % 10 == 0) {
-    //     DEBUG_PRINTF("Sent: CH1=%4d CH2=%4d CH3=%4d CH4=%4d CH5=%4d CH6=%4d CH7=%4d CH8=%4d\n",
-    //                   txData.channels[0], txData.channels[1], 
-    //                   txData.channels[2], txData.channels[3],
-    //                   txData.channels[4], txData.channels[5],
-    //                   txData.channels[6], txData.channels[7]);
-    //   }
-    // #endif
 }
 
 void processControllers() {
@@ -360,9 +330,8 @@ void loop() {
     }
     
     // === ТАЙМАУТ КОНТРОЛЛЕРА ===
-    // Если контроллер был подключен, но давно нет данных - отправляем сигнал отключения
-    if (controllerReallyConnected && (millis() - lastValidDataTime > CONTROLLER_TIMEOUT)) {
-        controllerReallyConnected = false;
+    if (controllerConnected && (millis() - lastValidDataTime > CONTROLLER_TIMEOUT)) {
+        controllerConnected = false;
         digitalWrite(LED_PIN, LED_OFF);
         txData.connected = 0;
         esp_now_send(receiverMac, (uint8_t *)&txData, sizeof(txData));
