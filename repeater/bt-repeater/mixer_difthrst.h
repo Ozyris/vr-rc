@@ -49,8 +49,8 @@ void applyMixer(MixerData *input, MixerData *output) {
     yaw = yaw * DIFTHRST_SCALE / 100;
     
     // Вычисляем моторы (лево-право)
-    int16_t motorLeft = throttle + yaw;   // Газ + Рыскание
-    int16_t motorRight = throttle - yaw;  // Газ - Рыскание
+    int16_t motorLeft = throttle - yaw;   // Газ + Рыскание
+    int16_t motorRight = throttle + yaw;  // Газ - Рыскание
     
     // Приводим к диапазону 1000-2000
     uint16_t rawLeft = constrain(motorLeft + PULSE_CENTER, PULSE_MIN, PULSE_MAX);
