@@ -20,7 +20,8 @@ typedef struct {
     uint16_t channels[MAX_CHANNELS];
 } MixerData;
 
-static int16_t trimValue = 0;
+static int16_t trimYaw = 0;      // Трим для рыскания (CH2)
+static int16_t trimElevator = 0; // Трим для элеватора (CH1)
 
 uint16_t scaleMotorPulse(uint16_t pulse) {
     if (pulse <= PULSE_MIN) return MOTOR_PULSE_MIN;
@@ -29,44 +30,61 @@ uint16_t scaleMotorPulse(uint16_t pulse) {
 }
 
 void applyMixer(MixerData *input, MixerData *output) {
-    // === КАНАЛ 1 (Elevator) ===
-    output->channels[0] = input->channels[0];
+    // === ТРИММИРОВАНИЕ ===
+    // CH5 (кнопка 0x0001) → увеличиваем трим рыскания
+    if (input->channels[4] == PULSE_MAX) {
+        trimYaw += TRIM_STEP;
+        if (trimYaw > TRIM_MAX) trimYaw = TRIM_MAX;
+        #ifdef DEBUG
+            Serial.printf("Trim Yaw UP: %d\n", trimYaw);
+        #endif
+    }
+    
+    // CH8 (кнопка 0x0008) → уменьшаем трим рыскания
+    if (input->channels[7] == PULSE_MAX) {
+        trimYaw -= TRIM_STEP;
+        if (trimYaw < TRIM_MIN) trimYaw = TRIM_MIN;
+        #ifdef DEBUG
+            Serial.printf("Trim Yaw DOWN: %d\n", trimYaw);
+        #endif
+    }
+    
+    // CH6 (кнопка 0x0002) → увеличиваем трим элеватора
+    if (input->channels[5] == PULSE_MAX) {
+        trimElevator += TRIM_STEP;
+        if (trimElevator > TRIM_MAX) trimElevator = TRIM_MAX;
+        #ifdef DEBUG
+            Serial.printf("Trim Elevator UP: %d\n", trimElevator);
+        #endif
+    }
+    
+    // CH7 (кнопка 0x0004) → уменьшаем трим элеватора
+    if (input->channels[6] == PULSE_MAX) {
+        trimElevator -= TRIM_STEP;
+        if (trimElevator < TRIM_MIN) trimElevator = TRIM_MIN;
+        #ifdef DEBUG
+            Serial.printf("Trim Elevator DOWN: %d\n", trimElevator);
+        #endif
+    }
+    
+    // === КАНАЛ 1 (Elevator) с тримом ===
+    int16_t elevator = input->channels[0] - PULSE_CENTER + trimElevator;
+    output->channels[0] = constrain(elevator + PULSE_CENTER, PULSE_MIN, PULSE_MAX);
     
     // === КАНАЛ 2 (Ailerons) - резерв ===
     output->channels[1] = PULSE_CENTER;
     
-    // === ТРИММИРОВАНИЕ ===
-    // CH5 (кнопка 0x0001) → увеличиваем трим
-    if (input->channels[4] == PULSE_MAX) {
-        trimValue += TRIM_STEP;
-        if (trimValue > TRIM_MAX) trimValue = TRIM_MAX;
-        #ifdef DEBUG
-            Serial.printf("Trim UP: %d\n", trimValue);
-        #endif
-    }
-    
-    // CH8 (кнопка 0x0008) → уменьшаем трим
-    if (input->channels[7] == PULSE_MAX) {
-        trimValue -= TRIM_STEP;
-        if (trimValue < TRIM_MIN) trimValue = TRIM_MIN;
-        #ifdef DEBUG
-            Serial.printf("Trim DOWN: %d\n", trimValue);
-        #endif
-    }
-    
     // === КАНАЛЫ 5-8 (для приемника) ===
-    output->channels[4] = input->channels[5];  // CH5 = кнопка 0x0002
-    output->channels[5] = input->channels[6];  // CH6 = кнопка 0x0004
-    output->channels[6] = PULSE_MIN;           // CH7 = 0
-    output->channels[7] = PULSE_MIN;           // CH8 = 0
+    output->channels[4] = PULSE_MIN;  // CH5 = 0
+    output->channels[5] = PULSE_MIN;  // CH6 = 0
+    output->channels[6] = PULSE_MIN;  // CH7 = 0
+    output->channels[7] = PULSE_MIN;  // CH8 = 0
     
     // === ДИФФЕРЕНЦИАЛЬНАЯ ТЯГА ===
     int16_t throttle = input->channels[2] - PULSE_CENTER;
     
-    // === ТРИМ ПРИМЕНЯЕТСЯ СРАЗУ К YAW ===
-    int16_t yaw = input->channels[1] - PULSE_CENTER + trimValue;
-    
-    // Масштабируем yaw
+    // Трим применяется к yaw
+    int16_t yaw = input->channels[1] - PULSE_CENTER + trimYaw;
     yaw = yaw * DIFTHRST_SCALE / 100;
     
     // Вычисляем моторы
@@ -82,11 +100,10 @@ void applyMixer(MixerData *input, MixerData *output) {
 
 void printMixerInfo(MixerData *data) {
     #ifdef DEBUG
-        Serial.printf("Output: CH1=%4d CH2=%4d CH3=%4d CH4=%4d CH5=%4d CH6=%4d CH7=%4d CH8=%4d\n",
+        Serial.printf("Trim Yaw: %d, Trim Elev: %d, Output: CH1=%4d CH2=%4d CH3=%4d CH4=%4d\n",
+                      trimYaw, trimElevator,
                       data->channels[0], data->channels[1], 
-                      data->channels[2], data->channels[3],
-                      data->channels[4], data->channels[5],
-                      data->channels[6], data->channels[7]);
+                      data->channels[2], data->channels[3]);
     #endif
 }
 
