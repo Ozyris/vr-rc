@@ -11,7 +11,7 @@
 // === НАСТРОЙКИ ===
 #define DIFTHRST_SCALE 50
 #define MOTOR_PULSE_MIN 1000
-#define MOTOR_PULSE_MAX 1300
+#define MOTOR_PULSE_MAX 1400
 #define TRIM_STEP 5
 #define TRIM_MIN -400
 #define TRIM_MAX 400
