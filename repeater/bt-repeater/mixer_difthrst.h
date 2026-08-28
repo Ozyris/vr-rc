@@ -9,7 +9,7 @@
 #define MAX_CHANNELS 8
 
 // === НАСТРОЙКИ ===
-#define DIFTHRST_SCALE 50
+#define DIFTHRST_SCALE 25
 #define MOTOR_PULSE_MIN 1000
 #define MOTOR_PULSE_MAX 1400
 #define TRIM_STEP 5
@@ -23,15 +23,8 @@ typedef struct {
 static int16_t trimYaw = 0;      // Трим для рыскания (CH2)
 static int16_t trimElevator = 0; // Трим для элеватора (CH1)
 
-uint16_t scaleMotorPulse(uint16_t pulse) {
-    if (pulse <= PULSE_MIN) return MOTOR_PULSE_MIN;
-    if (pulse >= PULSE_MAX) return MOTOR_PULSE_MAX;
-    return map(pulse, PULSE_MIN, PULSE_MAX, MOTOR_PULSE_MIN, MOTOR_PULSE_MAX);
-}
-
 void applyMixer(MixerData *input, MixerData *output) {
     // === ТРИММИРОВАНИЕ ===
-    // CH5 (кнопка 0x0001) → увеличиваем трим рыскания
     if (input->channels[4] == PULSE_MAX) {
         trimYaw += TRIM_STEP;
         if (trimYaw > TRIM_MAX) trimYaw = TRIM_MAX;
@@ -40,7 +33,6 @@ void applyMixer(MixerData *input, MixerData *output) {
         #endif
     }
     
-    // CH8 (кнопка 0x0008) → уменьшаем трим рыскания
     if (input->channels[7] == PULSE_MAX) {
         trimYaw -= TRIM_STEP;
         if (trimYaw < TRIM_MIN) trimYaw = TRIM_MIN;
@@ -49,7 +41,6 @@ void applyMixer(MixerData *input, MixerData *output) {
         #endif
     }
     
-    // CH6 (кнопка 0x0002) → увеличиваем трим элеватора
     if (input->channels[5] == PULSE_MAX) {
         trimElevator += TRIM_STEP;
         if (trimElevator > TRIM_MAX) trimElevator = TRIM_MAX;
@@ -58,7 +49,6 @@ void applyMixer(MixerData *input, MixerData *output) {
         #endif
     }
     
-    // CH7 (кнопка 0x0004) → уменьшаем трим элеватора
     if (input->channels[6] == PULSE_MAX) {
         trimElevator -= TRIM_STEP;
         if (trimElevator < TRIM_MIN) trimElevator = TRIM_MIN;
@@ -75,27 +65,41 @@ void applyMixer(MixerData *input, MixerData *output) {
     output->channels[1] = PULSE_CENTER;
     
     // === КАНАЛЫ 5-8 (для приемника) ===
-    output->channels[4] = PULSE_MIN;  // CH5 = 0
-    output->channels[5] = PULSE_MIN;  // CH6 = 0
-    output->channels[6] = PULSE_MIN;  // CH7 = 0
-    output->channels[7] = PULSE_MIN;  // CH8 = 0
+    output->channels[4] = PULSE_MIN;
+    output->channels[5] = PULSE_MIN;
+    output->channels[6] = PULSE_MIN;
+    output->channels[7] = PULSE_MIN;
     
     // === ДИФФЕРЕНЦИАЛЬНАЯ ТЯГА ===
-    int16_t throttle = input->channels[2] - PULSE_CENTER;
+    int16_t throttle = input->channels[2];
     
-    // Трим применяется к yaw
     int16_t yaw = input->channels[1] - PULSE_CENTER + trimYaw;
     yaw = yaw * DIFTHRST_SCALE / 100;
     
-    // Вычисляем моторы
-    int16_t motorLeft = throttle - yaw;
-    int16_t motorRight = throttle + yaw;
+    int16_t motorLeft = throttle;
+    int16_t motorRight = throttle;
     
-    uint16_t rawLeft = constrain(motorLeft + PULSE_CENTER, PULSE_MIN, PULSE_MAX);
-    uint16_t rawRight = constrain(motorRight + PULSE_CENTER, PULSE_MIN, PULSE_MAX);
+    if (yaw > 0) {
+        motorRight = throttle + yaw;
+        if (motorRight > MOTOR_PULSE_MAX) {
+            int16_t excess = motorRight - MOTOR_PULSE_MAX;
+            motorRight = MOTOR_PULSE_MAX;
+            motorLeft = throttle - excess;
+            if (motorLeft < MOTOR_PULSE_MIN) motorLeft = MOTOR_PULSE_MIN;
+        }
+    } else if (yaw < 0) {
+        motorLeft = throttle - yaw;
+        if (motorLeft > MOTOR_PULSE_MAX) {
+            int16_t excess = motorLeft - MOTOR_PULSE_MAX;
+            motorLeft = MOTOR_PULSE_MAX;
+            motorRight = throttle - excess;
+            if (motorRight < MOTOR_PULSE_MIN) motorRight = MOTOR_PULSE_MIN;
+        }
+    }
     
-    output->channels[2] = scaleMotorPulse(rawLeft);
-    output->channels[3] = scaleMotorPulse(rawRight);
+    // === ПРОСТО ОГРАНИЧИВАЕМ (без масштабирования) ===
+    output->channels[2] = constrain(motorLeft, MOTOR_PULSE_MIN, MOTOR_PULSE_MAX);
+    output->channels[3] = constrain(motorRight, MOTOR_PULSE_MIN, MOTOR_PULSE_MAX);
 }
 
 void printMixerInfo(MixerData *data) {
