@@ -1,24 +1,51 @@
 /**
  * Daydream Controller → USB HID Gamepad
- * Управление через ОРИЕНТАЦИЮ (quaternion / forward-up vectors)
- * 
- * Оси HID:
- *   X  = Roll   (ориентация)
- *   Y  = Pitch  (ориентация)
- *   Z  = Yaw    (ориентация)
- *   Rz = Throttle (трекпад)
+ * Управление через ОРИЕНТАЦИЮ (кватернион, forward/up, gravity)
  *
- * Кнопки HID:
- *   1 = Arm        (зажат APP)
- *   2 = Mode       (клик)
- *   3 = Click      (трекпад-клик)
+ * ─── Схема калибровки ──────────────────────────────────────────────────
+ *   APP → startCalibration():
+ *       • yaw_reference = текущий абсолютный yaw (момент нажатия)
+ *       • запускается сессия сбора 32 BLE-пакетов
+ *       • фильтр НЕ сбрасывается — HID не прыгает в центр
+ *
+ *   Завершение сессии:
+ *       • cal.valid = true
+ *       • filter.pitch/roll = текущие абсолютные
+ *       • filter.yaw = 0   (центрируем только yaw)
+ *
+ *   Проверка неподвижности через акселерометр временно отключена.
+ *
+ * ─── Важное про оси Daydream ───────────────────────────────────────────
+ *   Yaw  — вращение вокруг МИРОВОЙ вертикали (формула через проекцию
+ *          worldUp на плоскость ⟂ forward).
+ *   Roll — вращение вокруг оси forward (atan2 по forward.x/z).
+ *   Pitch — наклон forward вверх/вниз от горизонта.
+ *
+ * ─── Миксер осей (дефайны AXIS_*_SRC) ──────────────────────────────────
+ *   SRC_ROLL / SRC_PITCH / SRC_YAW  — с ориентации
+ *   SRC_TP_X / SRC_TP_Y             — с трекпада
+ *   SRC_NONE                        — ось в центре
+ *
+ * ─── LED-индикация ─────────────────────────────────────────────────────
+ *   1 вспышка           — начало калибровки
+ *   3 вспышки (100/100) — калибровка успешна
+ *   2 вспышки (50/50)   — VOL+ (чувствительность выше)
+ *   3 вспышки (50/50)   — VOL− (чувствительность ниже)
+ *   мигание 1 Гц        — ожидание подключения BLE
+ *
+ * ─── Кнопки Daydream ───────────────────────────────────────────────────
+ *   APP      = калибровка (yaw reference)
+ *   VOL UP   = чувствительность +
+ *   VOL DOWN = чувствительность −
+ *   BOOT     = сброс калибровки
+ *
+ * ─── Кнопки HID ────────────────────────────────────────────────────────
+ *   1 = Arm    (HOME)
+ *   2 = Mode   (клик)
+ *   3 = Click  (трекпад-клик)
  *   4 = App
  *
- * Кнопки Daydream:
- *   APP      = калибровка нейтрали
- *   VOL UP   = чувствительность +
- *   VOL DOWN = чувствительность -
- *   BOOT     = сброс калибровки
+ * Serial не используется.
  */
 
 #include <Arduino.h>
@@ -31,38 +58,54 @@
 #include <math.h>
 #include <Adafruit_TinyUSB.h>
 
-#define LED_PIN       8
+#define LED_PIN       48
 #define BOOT_BTN_PIN  0
+
+// ─── МИКСЕР: ИСТОЧНИКИ ДЛЯ HID-ОСЕЙ ────────────────────────────────────
+#define SRC_NONE   0
+#define SRC_ROLL   1
+#define SRC_PITCH  2
+#define SRC_YAW    3
+#define SRC_TP_X   4
+#define SRC_TP_Y   5
+
+#define AXIS_X_SRC   SRC_ROLL    // HID X  ← Roll
+#define AXIS_Y_SRC   SRC_PITCH   // HID Y  ← Pitch
+#define AXIS_Z_SRC   SRC_YAW     // HID Z  ← Yaw
+#define AXIS_RZ_SRC  SRC_TP_Y    // HID Rz ← Throttle (трекпад Y)
+
+#define INV_X   0
+#define INV_Y   0
+#define INV_Z   0
+#define INV_RZ  0
 
 // ─── USB HID DESCRIPTOR ─────────────────────────────────────────────────
 uint8_t const desc_hid_report[] = {
-  0x05, 0x01,        // Usage Page (Generic Desktop)
-  0x09, 0x05,        // Usage (Game Pad)
-  0xA1, 0x01,        // Collection (Application)
+  0x05, 0x01,
+  0x09, 0x05,
+  0xA1, 0x01,
 
-  // 16 кнопок
-  0x05, 0x09,        //   Usage Page (Button)
-  0x19, 0x01,        //   Usage Minimum (1)
-  0x29, 0x10,        //   Usage Maximum (16)
-  0x15, 0x00,        //   Logical Minimum (0)
-  0x25, 0x01,        //   Logical Maximum (1)
-  0x95, 0x10,        //   Report Count (16)
-  0x75, 0x01,        //   Report Size (1)
-  0x81, 0x02,        //   Input (Data,Var,Abs)
+  0x05, 0x09,
+  0x19, 0x01,
+  0x29, 0x10,
+  0x15, 0x00,
+  0x25, 0x01,
+  0x95, 0x10,
+  0x75, 0x01,
+  0x81, 0x02,
 
-  // Оси X, Y, Z, Rz (по 8 бит)
-  0x05, 0x01,        //   Usage Page (Generic Desktop)
-  0x09, 0x30,        //   Usage (X)
-  0x09, 0x31,        //   Usage (Y)
-  0x09, 0x32,        //   Usage (Z)
-  0x09, 0x35,        //   Usage (Rz)
-  0x15, 0x81,        //   Logical Minimum (-127)
-  0x25, 0x7F,        //   Logical Maximum (127)
-  0x75, 0x08,        //   Report Size (8)
-  0x95, 0x04,        //   Report Count (4)
-  0x81, 0x02,        //   Input (Data,Var,Abs)
+  0x05, 0x01,
+  0x09, 0x30,
+  0x09, 0x31,
+  0x09, 0x32,
+  0x09, 0x35,
+  0x15, 0x81,
+  0x25, 0x7F,
+  0x75, 0x08,
+  0x95, 0x04,
+  0x81, 0x02,
 
-  0xC0               // End Collection
+  0xC0
 };
 
 Adafruit_USBD_HID usb_hid(desc_hid_report, sizeof(desc_hid_report),
@@ -70,10 +113,10 @@ Adafruit_USBD_HID usb_hid(desc_hid_report, sizeof(desc_hid_report),
 
 typedef struct __attribute__((packed)) {
     uint16_t buttons;
-    int8_t x;   // roll
-    int8_t y;   // pitch
-    int8_t z;   // yaw
-    int8_t rz;  // throttle
+    int8_t x;
+    int8_t y;
+    int8_t z;
+    int8_t rz;
 } GamepadReport;
 
 // ─── НАСТРОЙКИ ──────────────────────────────────────────────────────────
@@ -118,6 +161,7 @@ Vec3 normalizeVec(Vec3 v) {
 // ─── СОСТОЯНИЕ ──────────────────────────────────────────────────────────
 struct ControllerState {
     int16_t raw_x, raw_y, raw_z;
+    float acc_x, acc_y, acc_z;
     Quat q;
     float angle_rad;
     float axis_x, axis_y, axis_z;
@@ -130,11 +174,17 @@ struct RCChannels {
     int16_t pitch, roll, yaw, throttle;
 } rc;
 
-// ─── КАЛИБРОВКА ─────────────────────────────────────────────────────────
+// ─── КАЛИБРОВКА ────────────────────────────────────────────────────────
 struct Calibration {
-    Quat q_neutral_inv = {1, 0, 0, 0};
+    float yaw_reference = 0.0f;
     bool valid = false;
 } cal;
+
+// ─── СЕССИЯ КАЛИБРОВКИ ─────────────────────────────────────────────────
+struct CalibrationSession {
+    bool active = false;
+    uint16_t samples = 0;
+} calSession;
 
 // ─── ЧУВСТВИТЕЛЬНОСТЬ ──────────────────────────────────────────────────
 struct Sensitivity {
@@ -162,8 +212,8 @@ BLEAdvertisedDevice* targetDevice = nullptr;
 Preferences prefs;
 
 // ─── LED ────────────────────────────────────────────────────────────────
-void ledOn()  { digitalWrite(LED_PIN, HIGH); }
-void ledOff() { digitalWrite(LED_PIN, LOW); }
+void ledOff()  { digitalWrite(LED_PIN, HIGH); }
+void ledOn()   { digitalWrite(LED_PIN, LOW);  }
 void ledBlink(int count, int onMs, int offMs) {
     for (int i = 0; i < count; i++) { ledOn(); delay(onMs); ledOff(); delay(offMs); }
 }
@@ -178,13 +228,26 @@ int16_t signExtend13(int16_t v) {
 void parsePacket(const uint8_t* data, size_t len) {
     if (len < 20 || data == nullptr) return;
 
+    // Ориентация (13-бит, axis-angle)
     cs.raw_x = signExtend13(((data[1]&0x03)<<11) | (data[2]<<3) | ((data[3]&0xE0)>>5));
     cs.raw_z = signExtend13(((data[3]&0x1F)<<8) | (data[4]&0xFF));
     cs.raw_y = signExtend13(((data[5]&0xFF)<<5) | ((data[6]&0xF8)>>3));
 
+    // Акселерометр (13-бит, ±8g → m/s²)
+    int16_t acc_raw_x = signExtend13(((data[6]&0x03)<<11) | (data[7]<<3) | ((data[8]&0xE0)>>5));
+    int16_t acc_raw_y = signExtend13(((data[8]&0x1F)<<8) | (data[9]&0xFF));
+    int16_t acc_raw_z = signExtend13(((data[10]&0xFF)<<5) | ((data[11]&0xF8)>>3));
+
+    const float ACC_SCALE = 16.0f * 9.81f / 4095.0f;
+    cs.acc_x = acc_raw_x * ACC_SCALE;
+    cs.acc_y = acc_raw_y * ACC_SCALE;
+    cs.acc_z = acc_raw_z * ACC_SCALE;
+
+    // Трекпад
     cs.trackpad_x = ((data[16]&0x1F)<<3) | ((data[17]&0xE0)>>5);
     cs.trackpad_y = ((data[17]&0x1F)<<3) | ((data[18]&0xE0)>>5);
 
+    // Кнопки
     uint8_t btns = data[18];
     cs.click = (btns & BTN_CLICK)    != 0;
     cs.home  = (btns & BTN_HOME)     != 0;
@@ -254,88 +317,111 @@ float wrap180(float a) {
     return a;
 }
 
-// ─── УГЛЫ ЧЕРЕЗ ВЕКТОРЫ ────────────────────────────────────────────────
+// ─── ВСПОМОГАТЕЛЬНОЕ: абсолютный yaw ───────────────────────────────────
+// Yaw = вращение вокруг МИРОВОЙ вертикали, измеряется через
+// проекцию worldUp на плоскость ⟂ forward.
+float computeYawAbsolute(Vec3 forward, Vec3 up) {
+    Vec3 worldUp = {0, 1, 0};
+    float d = dotVec(worldUp, forward);
+    Vec3 up_zero = {
+        worldUp.x - forward.x * d,
+        worldUp.y - forward.y * d,
+        worldUp.z - forward.z * d
+    };
+    up_zero = normalizeVec(up_zero);
+
+    Vec3 c = crossVec(up, up_zero);
+    float sinYaw = dotVec(forward, c);
+    float cosYaw = dotVec(up, up_zero);
+    return atan2f(sinYaw, cosYaw) * 180.0f / M_PI;
+}
+
+// ─── УГЛЫ: ПРЯМО ОТ ОРИЕНТАЦИИ ────────────────────────────────────────
 Euler getVectorAngles() {
     Euler result = {0, 0, 0};
-    if (!cal.valid) return result;
 
     computeQuaternion();
 
-    Quat q_local = quatMul(cal.q_neutral_inv, cs.q);
-    q_local.normalize();
+    dbg.forward = rotateVector(cs.q, {0, 0, -1});
+    dbg.up      = rotateVector(cs.q, {0, 1, 0});
+    dbg.right   = rotateVector(cs.q, {1, 0, 0});
 
-    dbg.forward = rotateVector(q_local, {0, 0, -1});
-    dbg.up      = rotateVector(q_local, {0, 1, 0});
-    dbg.right   = rotateVector(q_local, {1, 0, 0});
-
-    // PITCH
+    // PITCH — наклон forward от горизонта
     result.pitch = atan2f(dbg.forward.y,
                           sqrtf(dbg.forward.x*dbg.forward.x +
                                 dbg.forward.z*dbg.forward.z)) * 180.0f / M_PI;
 
-    // YAW
-    result.yaw = atan2f(dbg.forward.x, -dbg.forward.z) * 180.0f / M_PI;
+    // YAW — вращение вокруг мировой вертикали (через проекцию worldUp)
+    float yawAbsolute = computeYawAbsolute(dbg.forward, dbg.up);
+    result.yaw = wrap180(yawAbsolute - cal.yaw_reference);
 
-    // ROLL через проекцию worldUp
-    Vec3 worldUp = {0, 1, 0};
-    float d = dotVec(worldUp, dbg.forward);
-    Vec3 up_zero = {
-        worldUp.x - dbg.forward.x * d,
-        worldUp.y - dbg.forward.y * d,
-        worldUp.z - dbg.forward.z * d
-    };
-    up_zero = normalizeVec(up_zero);
-    dbg.up_zero = up_zero;
-
-    Vec3 c = crossVec(dbg.up, up_zero);
-    float sinRoll = dotVec(dbg.forward, c);
-    float cosRoll = dotVec(dbg.up, up_zero);
-    result.roll = atan2f(sinRoll, cosRoll) * 180.0f / M_PI;
+    // ROLL — вращение вокруг оси forward (atan2 по forward.x/z)
+    result.roll = atan2f(dbg.forward.x, -dbg.forward.z) * 180.0f / M_PI;
 
     result.pitch = wrap180(result.pitch);
     result.roll  = wrap180(result.roll);
     result.yaw   = wrap180(result.yaw);
+
     return result;
 }
 
 // ─── КАЛИБРОВКА ────────────────────────────────────────────────────────
-void calibrateNeutral() {
-    computeQuaternion();
+// yaw_reference фиксируется сразу при APP.
+void startCalibration() {
+    calSession.active  = true;
+    calSession.samples = 0;
 
-    cal.q_neutral_inv.w =  cs.q.w;
-    cal.q_neutral_inv.x = -cs.q.x;
-    cal.q_neutral_inv.y = -cs.q.y;
-    cal.q_neutral_inv.z = -cs.q.z;
+    // Захватываем текущий абсолютный yaw — той же формулой,
+    // что используется в getVectorAngles.
+    computeQuaternion();
+    Vec3 forward = rotateVector(cs.q, {0, 0, -1});
+    Vec3 up      = rotateVector(cs.q, {0, 1, 0});
+
+    cal.yaw_reference = computeYawAbsolute(forward, up);
+    cal.valid = false;   // станет true после завершения сессии
+
+    ledBlink(1, 50, 50);   // 1 вспышка — старт
+}
+
+// Завершение сессии: cal.valid = true, фильтр выравнивается
+// в текущее абсолютное положение, но по yaw — в 0.
+void collectCalibrationSample() {
+    if (!calSession.active) return;
+
+    calSession.samples++;
+
+    const uint16_t N = 32;
+    if (calSession.samples < N) return;
+
+    calSession.active = false;
+
+    // Проверка неподвижности через акселерометр временно отключена.
+    // bool magnitudeOK = ...;
+    // bool stableOK    = ...;
+    // if (!magnitudeOK || !stableOK) { ledBlink(5, 30, 30); return; }
+
     cal.valid = true;
 
-    filter.pitch = filter.roll = filter.yaw = 0;
-
     prefs.begin("fpv", false);
-    prefs.putFloat("qw", cal.q_neutral_inv.w);
-    prefs.putFloat("qx", cal.q_neutral_inv.x);
-    prefs.putFloat("qy", cal.q_neutral_inv.y);
-    prefs.putFloat("qz", cal.q_neutral_inv.z);
-    prefs.putBool ("cal", true);
+    prefs.putFloat("yawref", cal.yaw_reference);
+    prefs.putBool ("cal",    true);
     prefs.end();
 
-    Serial.printf("\n🎯 CALIBRATED: raw=(%d,%d,%d) angle=%.2f°\n",
-                  cs.raw_x, cs.raw_y, cs.raw_z,
-                  cs.angle_rad * 180.0f / M_PI);
-    ledBlink(3, 100, 100);
+    // Выравниваем фильтр в текущее откалиброванное положение.
+    // pitch/roll — абсолютные, yaw — 0.
+    Euler current = getVectorAngles();
+    filter.pitch = current.pitch;
+    filter.roll  = current.roll;
+    filter.yaw   = 0.0f;
+
+    ledBlink(3, 100, 100);   // 3 вспышки — успех
 }
 
 void loadCalibration() {
     prefs.begin("fpv", true);
     if (prefs.getBool("cal", false)) {
-        cal.q_neutral_inv.w = prefs.getFloat("qw", 1.0f);
-        cal.q_neutral_inv.x = prefs.getFloat("qx", 0.0f);
-        cal.q_neutral_inv.y = prefs.getFloat("qy", 0.0f);
-        cal.q_neutral_inv.z = prefs.getFloat("qz", 0.0f);
-        cal.q_neutral_inv.normalize();
+        cal.yaw_reference = prefs.getFloat("yawref", 0.0f);
         cal.valid = true;
-        Serial.println(F("📂 Calibration loaded"));
-    } else {
-        Serial.println(F("⚠️ No saved calibration"));
     }
     prefs.end();
 }
@@ -351,63 +437,78 @@ Euler filterEuler(Euler raw) {
     return { filter.pitch, filter.roll, filter.yaw };
 }
 
-// ─── ПРЕОБРАЗОВАНИЕ В RC ───────────────────────────────────────────────
-void convertToRC(Euler e) {
-    float p = constrain(e.pitch, -sens.pitch_range, sens.pitch_range);
-    float r = constrain(e.roll,  -sens.roll_range,  sens.roll_range);
-    float y = constrain(e.yaw,   -sens.yaw_range,   sens.yaw_range);
+// ─── МИКСЕР ────────────────────────────────────────────────────────────
+int16_t resolveSource(uint8_t src, Euler e) {
+    switch (src) {
+        case SRC_ROLL:
+            return 1500 + (int16_t)(constrain(e.roll, -sens.roll_range, sens.roll_range)
+                                    / sens.roll_range * 500);
+        case SRC_PITCH:
+            return 1500 + (int16_t)(constrain(e.pitch, -sens.pitch_range, sens.pitch_range)
+                                    / sens.pitch_range * 500);
+        case SRC_YAW:
+            return 1500 + (int16_t)(constrain(e.yaw, -sens.yaw_range, sens.yaw_range)
+                                    / sens.yaw_range * 500);
+        case SRC_TP_X:
+            return (cs.trackpad_x > 0 || cs.trackpad_y > 0)
+                   ? map(cs.trackpad_x, 0, 255, 1000, 2000) : 1500;
+        case SRC_TP_Y:
+            return (cs.trackpad_x > 0 || cs.trackpad_y > 0)
+                   ? map(cs.trackpad_y, 255, 0, 1000, 2000) : 1000;
+        case SRC_NONE:
+        default:
+            return 1500;
+    }
+}
 
+void convertToRC(Euler e) {
+    float p = e.pitch, r = e.roll, y = e.yaw;
     if (fabsf(p) < sens.deadzone) p = 0;
     if (fabsf(r) < sens.deadzone) r = 0;
     if (fabsf(y) < sens.deadzone) y = 0;
+    Euler e_dz = { p, r, y };
 
-    rc.pitch = 1500 + (int16_t)(p / sens.pitch_range * 500);
-    rc.roll  = 1500 + (int16_t)(r / sens.roll_range  * 500);
-    rc.yaw   = 1500 + (int16_t)(y / sens.yaw_range   * 500);
-
-    rc.pitch = constrain(rc.pitch, 1000, 2000);
-    rc.roll  = constrain(rc.roll,  1000, 2000);
-    rc.yaw   = constrain(rc.yaw,   1000, 2000);
-
-    // Газ с трекпада — без сглаживания
-    if (cs.trackpad_x > 0 || cs.trackpad_y > 0) {
-        rc.throttle = map(cs.trackpad_y, 255, 0, 1000, 2000);
-    } else {
-        rc.throttle = 1000;
-    }
-    rc.throttle = constrain(rc.throttle, 1000, 2000);
+    rc.roll     = constrain(resolveSource(AXIS_X_SRC,  e_dz), 1000, 2000);
+    rc.pitch    = constrain(resolveSource(AXIS_Y_SRC,  e_dz), 1000, 2000);
+    rc.yaw      = constrain(resolveSource(AXIS_Z_SRC,  e_dz), 1000, 2000);
+    rc.throttle = constrain(resolveSource(AXIS_RZ_SRC, e_dz), 1000, 2000);
 }
 
 // ─── ОТПРАВКА В USB HID ────────────────────────────────────────────────
 void sendHIDReport() {
     GamepadReport report;
 
-    // RC (1000..2000) → HID (-127..127)
-    report.x  = map(rc.roll,     1000, 2000, -127, 127); // Roll
-    report.y  = map(rc.pitch,    1000, 2000, -127, 127); // Pitch
-    report.z  = map(rc.yaw,      1000, 2000, -127, 127); // Yaw
-    report.rz = map(rc.throttle, 1000, 2000, -127, 127); // Throttle
+    int8_t hx  = map(rc.roll,     1000, 2000, -127, 127);
+    int8_t hy  = map(rc.pitch,    1000, 2000, -127, 127);
+    int8_t hz  = map(rc.yaw,      1000, 2000, -127, 127);
+    int8_t hrz = map(rc.throttle, 1000, 2000, -127, 127);
 
-    // Кнопки
+#if INV_X
+    hx = -hx;
+#endif
+#if INV_Y
+    hy = -hy;
+#endif
+#if INV_Z
+    hz = -hz;
+#endif
+#if INV_RZ
+    hrz = -hrz;
+#endif
+
+    report.x  = hx;
+    report.y  = hy;
+    report.z  = hz;
+    report.rz = hrz;
+
     report.buttons = 0;
-    if (cs.home)  report.buttons |= (1 << 0);  // Arm (HOME)
+    if (cs.home)  report.buttons |= (1 << 0);  // Arm
     if (cs.click) report.buttons |= (1 << 1);  // Mode
-    if (cs.click) report.buttons |= (1 << 2);  // Click (можно убрать дубль)
+    if (cs.click) report.buttons |= (1 << 2);  // Click
     if (cs.app)   report.buttons |= (1 << 3);  // App
 
     if (TinyUSBDevice.mounted()) {
         usb_hid.sendReport(0, &report, sizeof(report));
-    }
-
-    static unsigned long lp = 0;
-    if (millis() - lp > 50) {
-        lp = millis();
-        Serial.printf("[HID] E:%7.2f %7.2f %7.2f | RC:%4d %4d %4d %4d | "
-                      "X:%4d Y:%4d Z:%4d RZ:%4d BTN:0x%04X\n",
-                      filter.pitch, filter.roll, filter.yaw,
-                      rc.pitch, rc.roll, rc.yaw, rc.throttle,
-                      report.x, report.y, report.z, report.rz,
-                      report.buttons);
     }
 }
 
@@ -415,6 +516,12 @@ void sendHIDReport() {
 void processData() {
     if (!gotData) return;
     gotData = false;
+
+    // Во время сессии калибровки просто считаем пакеты.
+    if (calSession.active) {
+        collectCalibrationSample();
+        return;
+    }
 
     if (cal.valid) {
         Euler raw = getVectorAngles();
@@ -431,29 +538,24 @@ void increaseSensitivity() {
     sens.pitch_range = max(5.0f,   sens.pitch_range * 0.85f);
     sens.roll_range  = max(5.0f,   sens.roll_range  * 0.85f);
     sens.yaw_range   = max(5.0f,   sens.yaw_range   * 0.85f);
-    Serial.printf("↑ SENS: P=%.1f R=%.1f Y=%.1f\n",
-                  sens.pitch_range, sens.roll_range, sens.yaw_range);
     ledBlink(2, 50, 50);
 }
 void decreaseSensitivity() {
     sens.pitch_range = min(180.0f, sens.pitch_range * 1.15f);
     sens.roll_range  = min(180.0f, sens.roll_range  * 1.15f);
     sens.yaw_range   = min(180.0f, sens.yaw_range   * 1.15f);
-    Serial.printf("↓ SENS: P=%.1f R=%.1f Y=%.1f\n",
-                  sens.pitch_range, sens.roll_range, sens.yaw_range);
     ledBlink(3, 50, 50);
 }
 
 // ─── BLE CALLBACKS ─────────────────────────────────────────────────────
 class MyClientCB : public BLEClientCallbacks {
-    void onConnect(BLEClient*)    { connected = true;  ledOn();  Serial.println("C"); }
-    void onDisconnect(BLEClient*) { connected = false; ledOff(); Serial.println("D"); }
+    void onConnect(BLEClient*)    { connected = true;  ledOn();  }
+    void onDisconnect(BLEClient*) { connected = false; ledOff(); }
 };
 
 class MyScanCB : public BLEAdvertisedDeviceCallbacks {
     void onResult(BLEAdvertisedDevice dev) {
         if (dev.haveServiceUUID() && dev.getServiceUUID().equals(SERVICE_UUID)) {
-            Serial.printf("F:%s\n", dev.getAddress().toString().c_str());
             targetDevice = new BLEAdvertisedDevice(dev);
             BLEDevice::getScan()->stop();
         }
@@ -462,13 +564,12 @@ class MyScanCB : public BLEAdvertisedDeviceCallbacks {
 
 void connectToDevice() {
     if (!targetDevice || connected) return;
-    Serial.println("Connecting...");
+
     if (client) { delete client; client = nullptr; }
     client = BLEDevice::createClient();
     client->setClientCallbacks(new MyClientCB());
 
     if (!client->connect(targetDevice)) {
-        Serial.println("Connect failed");
         delete targetDevice; targetDevice = nullptr; return;
     }
     BLERemoteService* srv = client->getService(SERVICE_UUID);
@@ -483,11 +584,9 @@ void connectToDevice() {
         });
         BLERemoteDescriptor* cccd = ch->getDescriptor(CCCD_UUID);
         if (cccd) { uint8_t v[] = {0x01, 0x00}; cccd->writeValue(v, 2); }
-        Serial.println("N");
         delete targetDevice; targetDevice = nullptr;
         loadCalibration();
     } else {
-        Serial.println("No notify");
         client->disconnect();
         delete targetDevice; targetDevice = nullptr;
     }
@@ -495,7 +594,6 @@ void connectToDevice() {
 
 void startScan() {
     if (connected) return;
-    Serial.println("S");
     ledOn();
     BLEScan* scan = BLEDevice::getScan();
     scan->setAdvertisedDeviceCallbacks(new MyScanCB());
@@ -507,9 +605,6 @@ void startScan() {
 
 // ─── SETUP ─────────────────────────────────────────────────────────────
 void setup() {
-    Serial.begin(115200);
-    delay(500);
-
     // USB HID
     TinyUSBDevice.setManufacturerDescriptor("Custom");
     TinyUSBDevice.setProductDescriptor("Daydream FPV Gamepad");
@@ -523,11 +618,6 @@ void setup() {
     // GPIO
     pinMode(LED_PIN, OUTPUT); ledOff();
     pinMode(BOOT_BTN_PIN, INPUT_PULLUP);
-
-    Serial.println("\n╔═══════════════════════════════════════════════════════════════╗");
-    Serial.println("║  Daydream Orientation → USB HID Gamepad                       ║");
-    Serial.println("║  APP=калибровка  VOL+=чувств+  VOL-=чувств-  BOOT=сброс       ║");
-    Serial.println("╚═══════════════════════════════════════════════════════════════╝");
 
     // BLE
     BLEDevice::init("DaydreamFPV");
@@ -545,7 +635,10 @@ void loop() {
         digitalWrite(LED_PIN, !digitalRead(LED_PIN));
     }
 
-    if (cs.app && !prevApp) calibrateNeutral();
+    // APP — старт калибровки (yaw reference захватывается сразу)
+    if (cs.app && !prevApp && !calSession.active) {
+        startCalibration();
+    }
     prevApp = cs.app;
 
     if (cs.vu && !prevVu) increaseSensitivity();
@@ -570,7 +663,6 @@ void loop() {
         static unsigned long last = 0;
         if (millis() - last > 300) {
             last = millis();
-            Serial.println("R: reset calibration");
             cal.valid = false;
             prefs.begin("fpv", false);
             prefs.putBool("cal", false);
