@@ -445,7 +445,7 @@ void packChannelsAndSend() {
     txData.channels[1] = rc.pitch;
     txData.channels[2] = rc.throttle;
     txData.channels[3] = rc.yaw;
-    txData.channels[4] = PULSE_MIN;
+    txData.channels[4] = cs.click ? PULSE_MAX : PULSE_MIN;
     txData.channels[5] = PULSE_MIN;
     txData.channels[6] = PULSE_MIN;
     txData.channels[7] = PULSE_MIN;
