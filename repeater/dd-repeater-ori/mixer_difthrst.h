@@ -105,7 +105,7 @@ void applyMixer(MixerData *input, MixerData *output) {
     // === ВЫБОР THROTTLE ===
     int16_t throttle = throttleLocked ? lockedThrottle : input->channels[2];
 
-    if (!throttleLocked && throttle == PULSE_MIN) {
+    if (throttle == PULSE_MIN) {
         // ─── СТОП: моторы 1000, дифф. тяга выключена ───────────────────
         output->channels[2] = MOTOR_PULSE_MIN;
         output->channels[3] = MOTOR_PULSE_MIN;
