@@ -1,3 +1,4 @@
+//dd-repeater-ori.ino
 #include "config.h"
 #include <WiFi.h>
 #include <esp_now.h>
@@ -103,6 +104,7 @@ struct ControllerState {
 // ─── RC КАНАЛЫ ─────────────────────────────────────────────────────────
 struct RCChannels {
     int16_t pitch, roll, yaw, throttle;
+    int16_t aux;                                       // ← НОВОЕ
 } rc;
 
 // ─── КАЛИБРОВКА ────────────────────────────────────────────────────────
@@ -381,6 +383,7 @@ Euler filterEuler(Euler raw) {
 #define AXIS_Y_SRC   SRC_PITCH
 #define AXIS_Z_SRC   SRC_YAW
 #define AXIS_RZ_SRC  SRC_TP_Y
+#define AXIS_AUX_SRC SRC_TP_X
 
 int16_t resolveSource(uint8_t src, Euler e) {
     switch (src) {
@@ -412,10 +415,11 @@ void convertToRC(Euler e) {
     if (fabsf(y) < sens.deadzone) y = 0;
     Euler e_dz = { p, r, y };
 
-    rc.roll     = constrain(resolveSource(AXIS_X_SRC,  e_dz), 1000, 2000);
-    rc.pitch    = constrain(resolveSource(AXIS_Y_SRC,  e_dz), 1000, 2000);
-    rc.yaw      = constrain(resolveSource(AXIS_Z_SRC,  e_dz), 1000, 2000);
-    rc.throttle = constrain(resolveSource(AXIS_RZ_SRC, e_dz), 1000, 2000);
+    rc.roll     = constrain(resolveSource(AXIS_X_SRC,   e_dz), 1000, 2000);
+    rc.pitch    = constrain(resolveSource(AXIS_Y_SRC,   e_dz), 1000, 2000);
+    rc.yaw      = constrain(resolveSource(AXIS_Z_SRC,   e_dz), 1000, 2000);
+    rc.throttle = constrain(resolveSource(AXIS_RZ_SRC,  e_dz), 1000, 2000);
+    rc.aux      = constrain(resolveSource(AXIS_AUX_SRC, e_dz), 1000, 2000);  // ← НОВОЕ
 }
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -445,10 +449,10 @@ void packChannelsAndSend() {
     txData.channels[1] = rc.pitch;
     txData.channels[2] = rc.throttle;
     txData.channels[3] = rc.yaw;
-    txData.channels[4] = cs.click ? PULSE_MAX : PULSE_MIN;
-    txData.channels[5] = PULSE_MIN;
-    txData.channels[6] = PULSE_MIN;
-    txData.channels[7] = PULSE_MIN;
+    txData.channels[4] = rc.aux;                              // CH5 = AUX (тачпад X)   ← НОВОЕ
+    txData.channels[5] = cs.click ? PULSE_MAX : PULSE_MIN;    // CH6 = Click            ← ИЗМЕНЕНО
+    txData.channels[6] = PULSE_MIN;                           // CH7 резерв
+    txData.channels[7] = PULSE_MIN;                           // CH8 резерв
 
     // 2. Миксер
     MixerData input;
