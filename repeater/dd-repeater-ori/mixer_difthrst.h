@@ -102,39 +102,45 @@ void applyMixer(MixerData *input, MixerData *output) {
     // === ВЫБОР THROTTLE ===
     int16_t throttle = throttleLocked ? lockedThrottle : input->channels[2];
 
-    // === ДИФФЕРЕНЦИАЛЬНАЯ ТЯГА (в полном диапазоне 1000-2000) ===
-    int16_t yaw = input->channels[3] - PULSE_CENTER;
-    yaw = yaw * DIFTHRST_SCALE / 100;
+    if (throttle == PULSE_MIN) {
+        // ─── СТОП: моторы 1000, дифф. тяга выключена ───────────────────
+        output->channels[2] = MOTOR_PULSE_MIN;
+        output->channels[3] = MOTOR_PULSE_MIN;
+    } else {
+        // ─── ДИФФЕРЕНЦИАЛЬНАЯ ТЯГА (в полном диапазоне 1000-2000) ──────
+        int16_t yaw = input->channels[3] - PULSE_CENTER;
+        yaw = yaw * DIFTHRST_SCALE / 100;
 
-    int16_t motorLeft  = throttle;
-    int16_t motorRight = throttle;
+        int16_t motorLeft  = throttle;
+        int16_t motorRight = throttle;
 
-    if (yaw > 0) {
-        motorRight = throttle + yaw;
-        if (motorRight > PULSE_MAX) {
-            int16_t excess = motorRight - PULSE_MAX;
-            motorRight = PULSE_MAX;
-            motorLeft = throttle - excess;
-            if (motorLeft < PULSE_MIN) motorLeft = PULSE_MIN;
+        if (yaw > 0) {
+            motorRight = throttle + yaw;
+            if (motorRight > PULSE_MAX) {
+                int16_t excess = motorRight - PULSE_MAX;
+                motorRight = PULSE_MAX;
+                motorLeft = throttle - excess;
+                if (motorLeft < PULSE_MIN) motorLeft = PULSE_MIN;
+            }
+        } else if (yaw < 0) {
+            motorLeft = throttle - yaw;
+            if (motorLeft > PULSE_MAX) {
+                int16_t excess = motorLeft - PULSE_MAX;
+                motorLeft = PULSE_MAX;
+                motorRight = throttle - excess;
+                if (motorRight < PULSE_MIN) motorRight = PULSE_MIN;
+            }
         }
-    } else if (yaw < 0) {
-        motorLeft = throttle - yaw;
-        if (motorLeft > PULSE_MAX) {
-            int16_t excess = motorLeft - PULSE_MAX;
-            motorLeft = PULSE_MAX;
-            motorRight = throttle - excess;
-            if (motorRight < PULSE_MIN) motorRight = PULSE_MIN;
-        }
+
+        motorLeft  = constrain(motorLeft,  PULSE_MIN, PULSE_MAX);
+        motorRight = constrain(motorRight, PULSE_MIN, PULSE_MAX);
+
+        // ─── СЖАТИЕ В МОТОРНЫЙ ДИАПАЗОН (в самом конце) ────────────────
+        output->channels[2] = MOTOR_PULSE_MIN +
+            (int32_t)(motorLeft  - PULSE_MIN) * (MOTOR_PULSE_MAX - MOTOR_PULSE_MIN) / (PULSE_MAX - PULSE_MIN);
+        output->channels[3] = MOTOR_PULSE_MIN +
+            (int32_t)(motorRight - PULSE_MIN) * (MOTOR_PULSE_MAX - MOTOR_PULSE_MIN) / (PULSE_MAX - PULSE_MIN);
     }
-
-    motorLeft  = constrain(motorLeft,  PULSE_MIN, PULSE_MAX);
-    motorRight = constrain(motorRight, PULSE_MIN, PULSE_MAX);
-
-    // === СЖАТИЕ В МОТОРНЫЙ ДИАПАЗОН (в самом конце) ===
-    output->channels[2] = MOTOR_PULSE_MIN +
-        (int32_t)(motorLeft  - PULSE_MIN) * (MOTOR_PULSE_MAX - MOTOR_PULSE_MIN) / (PULSE_MAX - PULSE_MIN);
-    output->channels[3] = MOTOR_PULSE_MIN +
-        (int32_t)(motorRight - PULSE_MIN) * (MOTOR_PULSE_MAX - MOTOR_PULSE_MIN) / (PULSE_MAX - PULSE_MIN);
 
     // === ВЫХОД CH5 С ЗАЛИПАНИЕМ ===
     output->channels[4] = throttleLocked ? PULSE_MAX : PULSE_MIN;
