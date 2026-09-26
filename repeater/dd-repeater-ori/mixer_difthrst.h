@@ -1,21 +1,23 @@
 // mixer_difthrst.h
-// Дифференциальная тяга: вход AETR, выход roll/pitch/motorL/motorR
+// Дифференциальная тяга: вход AETR + AUX + Click, выход roll/pitch/motorL/motorR + AUX + Lock
 //
 // Вход:
 //   CH1 (channels[0]) = Roll     (A)
 //   CH2 (channels[1]) = Pitch    (E)
 //   CH3 (channels[2]) = Throttle (T)
 //   CH4 (channels[3]) = Yaw      (R)
-//   CH5 (channels[4]) = Click    (моментальный: PULSE_MAX = нажат)
-//   CH6..CH8          = резерв
+//   CH5 (channels[4]) = AUX      (тачпад X, живой)
+//   CH6 (channels[5]) = Click    (моментальный: PULSE_MAX = нажат)
+//   CH7..CH8          = резерв
 //
 // Выход:
 //   CH1 (channels[0]) = Roll     (проброс 1:1)
 //   CH2 (channels[1]) = Pitch    (проброс 1:1)
 //   CH3 (channels[2]) = MotorLeft
 //   CH4 (channels[3]) = MotorRight
-//   CH5 (channels[4]) = Throttle Lock (залипание: PULSE_MAX = заблокирован)
-//   CH6..CH8          = PULSE_MIN
+//   CH5 (channels[4]) = AUX      (проброс 1:1)
+//   CH6 (channels[5]) = Throttle Lock (залипание: PULSE_MAX = заблокирован)
+//   CH7..CH8          = PULSE_MIN
 //
 // Дифференциал:
 //   yawDiff = (yaw - PULSE_CENTER) * DIFTHRST_SCALE / 100
@@ -60,12 +62,13 @@ static bool     toggleFired      = false;
 static uint32_t clickPressTime   = 0;
 
 void applyMixer(MixerData *input, MixerData *output) {
-    // === ПРОБРОС ROLL / PITCH (1:1) ===
+    // === ПРОБРОС ROLL / PITCH / AUX (1:1) ===
     output->channels[0] = input->channels[0];
     output->channels[1] = input->channels[1];
+    output->channels[4] = input->channels[4];   // AUX
 
-    // === ОБРАБОТКА CLICK (CH5) — toggle по долгому нажатию ===
-    bool clickNow = (input->channels[4] == PULSE_MAX);
+    // === ОБРАБОТКА CLICK (CH6) — toggle по долгому нажатию ===
+    bool clickNow = (input->channels[5] == PULSE_MAX);
 
     // Фронт нажатия
     if (clickNow && !prevClickState) {
@@ -102,7 +105,7 @@ void applyMixer(MixerData *input, MixerData *output) {
     // === ВЫБОР THROTTLE ===
     int16_t throttle = throttleLocked ? lockedThrottle : input->channels[2];
 
-    if (throttle == PULSE_MIN) {
+    if (!throttleLocked && throttle == PULSE_MIN) {
         // ─── СТОП: моторы 1000, дифф. тяга выключена ───────────────────
         output->channels[2] = MOTOR_PULSE_MIN;
         output->channels[3] = MOTOR_PULSE_MIN;
@@ -142,21 +145,20 @@ void applyMixer(MixerData *input, MixerData *output) {
             (int32_t)(motorRight - PULSE_MIN) * (MOTOR_PULSE_MAX - MOTOR_PULSE_MIN) / (PULSE_MAX - PULSE_MIN);
     }
 
-    // === ВЫХОД CH5 С ЗАЛИПАНИЕМ ===
-    output->channels[4] = throttleLocked ? PULSE_MAX : PULSE_MIN;
+    // === ВЫХОД CH6 С ЗАЛИПАНИЕМ ===
+    output->channels[5] = throttleLocked ? PULSE_MAX : PULSE_MIN;
 
     // === РЕЗЕРВ ===
-    output->channels[5] = PULSE_MIN;
     output->channels[6] = PULSE_MIN;
     output->channels[7] = PULSE_MIN;
 }
 
 void printMixerInfo(MixerData *data) {
     #ifdef DEBUG
-        Serial.printf("DIFTHRST: CH1(roll)=%4d CH2(pitch)=%4d CH3(motorL)=%4d CH4(motorR)=%4d CH5(lock)=%4d\n",
+        Serial.printf("DIFTHRST: CH1(roll)=%4d CH2(pitch)=%4d CH3(motorL)=%4d CH4(motorR)=%4d CH5(aux)=%4d CH6(lock)=%4d\n",
                       data->channels[0], data->channels[1],
                       data->channels[2], data->channels[3],
-                      data->channels[4]);
+                      data->channels[4], data->channels[5]);
     #endif
 }
 
